@@ -6,15 +6,27 @@ import altair as alt
 import streamlit as st
 from dotenv import load_dotenv
 from supabase import create_client
+from pathlib import Path
+from PIL import Image
 
 # ===================== CONFIG =====================
 
 st.set_page_config(page_title="Frutto – MOI Dashboard", layout="wide")
 load_dotenv()
 
-SUPABASE_URL   = os.getenv("SUPABASE_URL")
-SUPABASE_KEY   = os.getenv("SUPABASE_ANON_KEY")
-SUPABASE_TABLE = os.getenv("SUPABASE_TABLE", "ventas_frutto")
+# Helpers para secrets/env
+def _get_secret(name: str, default=None):
+    try:
+        if hasattr(st, "secrets") and name in st.secrets:  # Streamlit Cloud
+            return st.secrets[name]
+    except Exception:
+        pass
+    return os.getenv(name, default)
+
+SUPABASE_URL   = _get_secret("SUPABASE_URL")
+SUPABASE_KEY   = _get_secret("SUPABASE_ANON_KEY")
+SUPABASE_TABLE = _get_secret("SUPABASE_TABLE", "ventas_frutto")
+LOGO_PATH      = _get_secret("LOGO_PATH", "Logo/WhatsApp Image 2025-08-26 at 1.50.59 PM (1).jpeg")
 
 COL_DATE   = "reqs_date"
 COL_REP    = "sales_rep"
@@ -58,7 +70,7 @@ def _contrast(hex_color: str) -> str:
     return "#FFFFFF" if lum < 140 else "#000000"
 
 
-def style_moi_bands(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+def style_moi_bands(df: pd.DataFrame):
     band_cols = ["Profit Band", "%Profit Band", "AOV Band", "#Orders Band", "Revenue Band", "MOI Overall"]
     sty = df.style
     for c in band_cols:
@@ -279,7 +291,17 @@ def agg_by_rep(df: pd.DataFrame) -> pd.DataFrame:
 
 # ===================== UI – Sidebar =====================
 
-st.title("MOI simple — por Sales Rep (base: reqs_date, filtro en servidor)")
+# Logo + título
+logo_file = Path(LOGO_PATH)
+cols = st.columns([1,6])
+with cols[0]:
+    if logo_file.exists():
+        try:
+            st.image(Image.open(logo_file), use_container_width=True)
+        except Exception:
+            st.empty()
+with cols[1]:
+    st.title("MOI simple — por Sales Rep (base: reqs_date, filtro en servidor)")
 
 with st.sidebar:
     gran = st.radio("Granularidad", ["Day", "Week", "Month", "Year"], horizontal=True)
