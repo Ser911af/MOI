@@ -477,15 +477,7 @@ dstart_eff, dend_eff = effective_range(base_date, gran, week_mode)
 st.caption(f"**Effective range:** {dstart_eff} → {dend_eff}")
 
 # ===================== Health Check =====================
-
-if debug_mode:
-    with st.expander("🩺 Health check", expanded=False):
-        st.write({
-            "has_SUPABASE_URL": bool(SUPABASE_URL),
-            "has_SUPABASE_ANON_KEY": bool(SUPABASE_KEY),
-            "table": SUPABASE_TABLE,
-            "logo_exists": Path(LOGO_PATH).exists(),
-        })
+# (Oculto permanentemente, eliminado para usuarios finales)
 
 # ===================== Fetch & filters =====================
 
