@@ -212,37 +212,52 @@ def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
     start_s = pd.Timestamp(dstart).date().isoformat()
     end_exclusive = (pd.Timestamp(dend) + pd.Timedelta(days=1)).date().isoformat()
 
-    frames = []
+    frames: list[pd.DataFrame] = []
     pages = 0
     start = 0
-    PAGE = 2000
+    # ⚠️ Supabase/PostgREST limita el tamaño de rango por request a ~1000 filas.
+    # Si pedimos 2000, devuelve 1000 y al sumar 2000 saltamos 1000 filas -> pérdida de datos.
+    PAGE = 1000
     select_list = ",".join(NEEDED)
-    total_count = None
 
+    # Primera llamada: obtener count exacto y la primera página
+    base = (
+        client.table(SUPABASE_TABLE)
+              .select(select_list, count='exact')
+              .gte(COL_DATE, start_s)
+              .lt(COL_DATE, end_exclusive)
+              .order(COL_DATE, desc=False)
+    )
+
+    first_last = start + PAGE - 1
+    resp = base.range(start, first_last).execute()
+    try:
+        total_count = resp.count
+    except Exception:
+        total_count = None
+
+    batch = pd.DataFrame(resp.data or [])
+    if not batch.empty:
+        frames.append(batch)
+        pages += 1
+        start += len(batch)  # avanzamos exactamente lo que recibimos
+
+    # Paginamos hasta consumir total_count (si lo sabemos) o hasta que vengan páginas vacías/pequeñas
     while True:
+        if total_count is not None and start >= total_count:
+            break
         last = start + PAGE - 1
-        query = (
-            client.table(SUPABASE_TABLE)
-                  .select(select_list, count='exact')
-                  .gte(COL_DATE, start_s)
-                  .lt(COL_DATE, end_exclusive)
-                  .order(COL_DATE, desc=False)
-        )
-        resp = query.range(start, last).execute()
-        if total_count is None:
-            try:
-                total_count = resp.count
-            except Exception:
-                total_count = None
-
+        resp = base.range(start, last).execute()
         batch = pd.DataFrame(resp.data or [])
         if batch.empty:
             break
         frames.append(batch)
         pages += 1
-        if len(batch) < PAGE:
+        got = len(batch)
+        start += got
+        if got < PAGE:
+            # última página
             break
-        start += PAGE
 
     if not frames:
         st.session_state["_last_fetch_rows"] = 0
@@ -253,6 +268,7 @@ def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
 
     df = pd.concat(frames, ignore_index=True)
 
+    # Fecha: evitar desplazamientos por tz
     if COL_DATE in df.columns:
         s = pd.to_datetime(df[COL_DATE], errors="coerce", utc=False)
         try:
