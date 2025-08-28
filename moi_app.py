@@ -463,7 +463,7 @@ with st.sidebar:
         value=min(DB_MAX_DATE, date.today()),
         min_value=DB_MIN_DATE,
         max_value=DB_MAX_DATE
-    ))
+    )
 
     st.markdown("**Targets scale based on…**")
     targets_mode = st.radio(
@@ -704,5 +704,6 @@ if not g.empty:
         tooltip=['sales_rep', t_aov, t_pct, t_ord, t_rev, t_prof, 'MOI Overall']
     ).properties(height=340, title="AOV vs Profit % (size = orders)")
     st.altair_chart(scatter, use_container_width=True)
+
 
 
