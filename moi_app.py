@@ -265,6 +265,15 @@ def fetch_server_filtered(dstart: date, dend: date) -> pd.DataFrame:
 
 
 def aplicar_filtros(df: pd.DataFrame, excluir_domingos: bool, paid_only: bool, excluir_neg: bool) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=NEEDED)
+    # Aseguramos columnas mínimas para evitar KeyError
+    for c in NEEDED:
+        if c not in df.columns:
+            df[c] = pd.Series(index=df.index, dtype="float64")
+    # Aseguramos tipo datetime en la columna de fecha
+    if COL_DATE in df.columns and not np.issubdtype(df[COL_DATE].dtype, np.datetime64):
+        df[COL_DATE] = pd.to_datetime(df[COL_DATE], errors="coerce")
     x = df.copy()
     if excluir_domingos:
         x = x[x[COL_DATE].dt.weekday != 6]
