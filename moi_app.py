@@ -442,6 +442,9 @@ with c2:
 # ===================== Sidebar =====================
 
 with st.sidebar:
+    st.markdown("### 🔧 Modo Debug")
+    debug_mode = st.checkbox("Mostrar paneles técnicos (Health & Diagnostics)", value=False, help="Actívalo sólo si quieres ver detalles técnicos de conexión, conteo de filas y auditoría.")
+
     st.markdown("### ⚙️ Debug")
     debug_ignore_filters = st.checkbox("Debug: ignore all business filters", value=False, help="Aplica ningún filtro (domingos, paid, negativos) para comparar con SQL.")
 
