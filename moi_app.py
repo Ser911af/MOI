@@ -445,8 +445,12 @@ with st.sidebar:
     st.markdown("### 🔧 Modo Debug")
     debug_mode = st.checkbox("Mostrar paneles técnicos (Health & Diagnostics)", value=False, help="Actívalo sólo si quieres ver detalles técnicos de conexión, conteo de filas y auditoría.")
 
+    if debug_mode:
     st.markdown("### ⚙️ Debug")
-    debug_ignore_filters = st.checkbox("Debug: ignore all business filters", value=False, help="Aplica ningún filtro (domingos, paid, negativos) para comparar con SQL.")
+    debug_ignore_filters = st.checkbox(
+        "Debug: ignore all business filters",
+        value=False,
+        help="Aplica ningún filtro (domingos, paid, negativos) para comparar con SQL.") para comparar con SQL.")
 
     gran = st.radio("Granularity", ["Day", "Week", "Month", "Year"], horizontal=True)
     week_mode = st.radio(
@@ -474,13 +478,14 @@ st.caption(f"**Effective range:** {dstart_eff} → {dend_eff}")
 
 # ===================== Health Check =====================
 
-with st.expander("🩺 Health check", expanded=False):
-    st.write({
-        "has_SUPABASE_URL": bool(SUPABASE_URL),
-        "has_SUPABASE_ANON_KEY": bool(SUPABASE_KEY),
-        "table": SUPABASE_TABLE,
-        "logo_exists": Path(LOGO_PATH).exists(),
-    })
+if debug_mode:
+    with st.expander("🩺 Health check", expanded=False):
+        st.write({
+            "has_SUPABASE_URL": bool(SUPABASE_URL),
+            "has_SUPABASE_ANON_KEY": bool(SUPABASE_KEY),
+            "table": SUPABASE_TABLE,
+            "logo_exists": Path(LOGO_PATH).exists(),
+        })
 
 # ===================== Fetch & filters =====================
 
@@ -490,37 +495,39 @@ with st.spinner("Querying Supabase…"):
 
 # ===================== Diagnostics =====================
 
-with st.expander("🔎 Diagnostics", expanded=False):
-    st.write({
-        "granularity": gran,
-        "week_mode": week_mode,
-        "targets_mode": targets_mode,
-        "from": str(dstart_eff),
-        "to": str(dend_eff),
-        "rows_raw": int(len(df_raw)),
-        "rows_after_filters": int(len(df_f)),
-        "unique_reps": int(df_f[COL_REP].nunique()) if not df_f.empty else 0,
-        "min_req": df_f[COL_DATE].min().strftime("%Y-%m-%d") if not df_f.empty else None,
-        "max_req": df_f[COL_DATE].max().strftime("%Y-%m-%d") if not df_f.empty else None,
-        "server_count": st.session_state.get("_server_count"),
-        "fetched_rows": st.session_state.get("_last_fetch_rows"),
-        "pages": st.session_state.get("_last_fetch_pages"),
-    })
-    if st.session_state.get("_server_count") is not None:
-        delta = (st.session_state.get("_server_count") or 0) - (st.session_state.get("_last_fetch_rows") or 0)
-        if delta != 0:
-            st.warning(f"⚠️ Server count says {st.session_state['_server_count']} rows for the range, but we fetched {st.session_state['_last_fetch_rows']}. Δ = {delta}. Revisa filtros, paginación o tipos de fecha.")
+if debug_mode:
+    if debug_mode:
+    with st.expander("🔎 Diagnostics", expanded=False):
+        st.write({
+            "granularity": gran,
+            "week_mode": week_mode,
+            "targets_mode": targets_mode,
+            "from": str(dstart_eff),
+            "to": str(dend_eff),
+            "rows_raw": int(len(df_raw)),
+            "rows_after_filters": int(len(df_f)),
+            "unique_reps": int(df_f[COL_REP].nunique()) if not df_f.empty else 0,
+            "min_req": df_f[COL_DATE].min().strftime("%Y-%m-%d") if not df_f.empty else None,
+            "max_req": df_f[COL_DATE].max().strftime("%Y-%m-%d") if not df_f.empty else None,
+            "server_count": st.session_state.get("_server_count"),
+            "fetched_rows": st.session_state.get("_last_fetch_rows"),
+            "pages": st.session_state.get("_last_fetch_pages"),
+        })
+        if st.session_state.get("_server_count") is not None:
+            delta = (st.session_state.get("_server_count") or 0) - (st.session_state.get("_last_fetch_rows") or 0)
+            if delta != 0:
+                st.warning(f"⚠️ Server count says {st.session_state['_server_count']} rows for the range, but we fetched {st.session_state['_last_fetch_rows']}. Δ = {delta}. Revisa filtros, paginación o tipos de fecha.")
 
-    if not df_f.empty:
-        monthly = (
-            df_f.assign(month=df_f[COL_DATE].dt.to_period("M").dt.start_time)
-                .groupby("month").size().reset_index(name="rows")
-        )
-        monthly["month"] = monthly["month"].dt.strftime("%Y-%m-01")
-        st.caption("Rows per month (after filters):")
-        st.table(monthly)
-        st.caption("Sample rows:")
-        st.dataframe(df_f.head(15), use_container_width=True)
+        if not df_f.empty:
+            monthly = (
+                df_f.assign(month=df_f[COL_DATE].dt.to_period("M").dt.start_time)
+                    .groupby("month").size().reset_index(name="rows")
+            )
+            monthly["month"] = monthly["month"].dt.strftime("%Y-%m-01")
+            st.caption("Rows per month (after filters):")
+            st.table(monthly)
+            st.caption("Sample rows:")
+            st.dataframe(df_f.head(15), use_container_width=True)
 
 # ===================== Ranking + MOI =====================
 
