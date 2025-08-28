@@ -197,6 +197,104 @@ def effective_range(d: date, granularity: str, week_mode: str = "window"):
         return p.start_time.date(), p.end_time.date()
     return ts.date(), ts.date()
 
+# ====== NEW: fetch_server_filtered_v2 con conteo exacto y manejo de tz ======
+@st.cache_data(show_spinner=False, ttl=60)
+def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        st.session_state["_last_fetch_rows"] = 0
+        st.session_state["_last_fetch_pages"] = 0
+        st.session_state["_last_fetch_err"] = "Missing Supabase secrets"
+        st.session_state["_server_count"] = None
+        return pd.DataFrame(columns=NEEDED)
+
+    client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+    start_s = pd.Timestamp(dstart).date().isoformat()
+    end_exclusive = (pd.Timestamp(dend) + pd.Timedelta(days=1)).date().isoformat()
+
+    frames = []
+    pages = 0
+    start = 0
+    PAGE = 2000
+    select_list = ",".join(NEEDED)
+    total_count = None
+
+    while True:
+        last = start + PAGE - 1
+        query = (
+            client.table(SUPABASE_TABLE)
+                  .select(select_list, count='exact')
+                  .gte(COL_DATE, start_s)
+                  .lt(COL_DATE, end_exclusive)
+                  .order(COL_DATE, desc=False)
+        )
+        resp = query.range(start, last).execute()
+        if total_count is None:
+            try:
+                total_count = resp.count
+            except Exception:
+                total_count = None
+
+        batch = pd.DataFrame(resp.data or [])
+        if batch.empty:
+            break
+        frames.append(batch)
+        pages += 1
+        if len(batch) < PAGE:
+            break
+        start += PAGE
+
+    if not frames:
+        st.session_state["_last_fetch_rows"] = 0
+        st.session_state["_last_fetch_pages"] = 0
+        st.session_state["_last_fetch_err"] = None
+        st.session_state["_server_count"] = total_count
+        return pd.DataFrame(columns=NEEDED)
+
+    df = pd.concat(frames, ignore_index=True)
+
+    if COL_DATE in df.columns:
+        s = pd.to_datetime(df[COL_DATE], errors="coerce", utc=False)
+        try:
+            if getattr(s.dt, 'tz', None) is not None:
+                s = s.dt.tz_convert(None)
+        except Exception:
+            pass
+        df[COL_DATE] = s
+
+    df[COL_REV]  = pd.to_numeric(df[COL_REV], errors="coerce")
+    df[COL_PROF] = pd.to_numeric(df[COL_PROF], errors="coerce")
+    if COL_REP in df.columns:
+        df[COL_REP] = df[COL_REP].astype("string").str.strip().fillna("(No rep)")
+
+    for c in NEEDED:
+        if c not in df.columns:
+            df[c] = np.nan
+
+    df = df[NEEDED].dropna(subset=[COL_DATE]).reset_index(drop=True)
+
+    st.session_state["_last_fetch_rows"] = len(df)
+    st.session_state["_last_fetch_pages"] = pages
+    st.session_state["_last_fetch_err"] = None
+    st.session_state["_server_count"] = total_count
+
+    return df
+    if granularity == "Week":
+        if week_mode == "window":
+            dstart = ts.date()
+            dend   = (ts + pd.Timedelta(days=6)).date()
+        else:
+            dstart = (ts - pd.offsets.Week(weekday=0)).date()  # Monday
+            dend   = (pd.Timestamp(dstart) + pd.Timedelta(days=6)).date()
+        return dstart, dend
+    if granularity == "Month":
+        p = ts.to_period("M")
+        return p.start_time.date(), p.end_time.date()
+    if granularity == "Year":
+        p = ts.to_period("Y")
+        return p.start_time.date(), p.end_time.date()
+    return ts.date(), ts.date()
+
 # ====== NEW fetch_server_filtered (inclusive end via lt(dend+1), TTL, logging) ======
 @st.cache_data(show_spinner=False, ttl=60)  # pequeño TTL para evitar cache eterno
 def fetch_server_filtered(dstart: date, dend: date) -> pd.DataFrame:
@@ -328,6 +426,9 @@ with c2:
 # ===================== Sidebar =====================
 
 with st.sidebar:
+    st.markdown("### ⚙️ Debug")
+    debug_ignore_filters = st.checkbox("Debug: ignore all business filters", value=False, help="Aplica ningún filtro (domingos, paid, negativos) para comparar con SQL.")
+
     gran = st.radio("Granularity", ["Day", "Week", "Month", "Year"], horizontal=True)
     week_mode = st.radio(
         "Week mode", ["window", "calendar"], index=0,
@@ -365,7 +466,7 @@ with st.expander("🩺 Health check", expanded=False):
 # ===================== Fetch & filters =====================
 
 with st.spinner("Querying Supabase…"):
-    df_raw = fetch_server_filtered(dstart_eff, dend_eff)
+    df_raw = fetch_server_filtered_v2(dstart_eff, dend_eff)
     df_f = apply_filters(df_raw, exclude_sundays, paid_only, exclude_neg)
 
 # ===================== Diagnostics =====================
@@ -382,7 +483,15 @@ with st.expander("🔎 Diagnostics", expanded=False):
         "unique_reps": int(df_f[COL_REP].nunique()) if not df_f.empty else 0,
         "min_req": df_f[COL_DATE].min().strftime("%Y-%m-%d") if not df_f.empty else None,
         "max_req": df_f[COL_DATE].max().strftime("%Y-%m-%d") if not df_f.empty else None,
+        "server_count": st.session_state.get("_server_count"),
+        "fetched_rows": st.session_state.get("_last_fetch_rows"),
+        "pages": st.session_state.get("_last_fetch_pages"),
     })
+    if st.session_state.get("_server_count") is not None:
+        delta = (st.session_state.get("_server_count") or 0) - (st.session_state.get("_last_fetch_rows") or 0)
+        if delta != 0:
+            st.warning(f"⚠️ Server count says {st.session_state['_server_count']} rows for the range, but we fetched {st.session_state['_last_fetch_rows']}. Δ = {delta}. Revisa filtros, paginación o tipos de fecha.")
+
     if not df_f.empty:
         monthly = (
             df_f.assign(month=df_f[COL_DATE].dt.to_period("M").dt.start_time)
