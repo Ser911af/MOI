@@ -197,50 +197,85 @@ def effective_range(d: date, granularity: str, week_mode: str = "window"):
         return p.start_time.date(), p.end_time.date()
     return ts.date(), ts.date()
 
-@st.cache_data(show_spinner=False)
+# ====== NEW fetch_server_filtered (inclusive end via lt(dend+1), TTL, logging) ======
+@st.cache_data(show_spinner=False, ttl=60)  # pequeño TTL para evitar cache eterno
 def fetch_server_filtered(dstart: date, dend: date) -> pd.DataFrame:
-    # Return empty DF with expected columns if secrets are missing
+    # ---- Guard clause: si faltan secrets, devolvemos DF vacío con columnas esperadas
     if not SUPABASE_URL or not SUPABASE_KEY:
+        st.session_state["_last_fetch_rows"] = 0
+        st.session_state["_last_fetch_pages"] = 0
+        st.session_state["_last_fetch_err"] = "Missing Supabase secrets"
         return pd.DataFrame(columns=NEEDED)
 
     client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    frames, start = [], 0
+
+    # ---- Ventana de fechas inclusiva y robusta (funciona con DATE o TIMESTAMP):
+    # >= dstart  y  < (dend + 1 día)  => incluye TODO el último día aunque haya horas
+    start_s = pd.Timestamp(dstart).date().isoformat()
+    end_exclusive = (pd.Timestamp(dend) + pd.Timedelta(days=1)).date().isoformat()
+
+    frames = []
+    pages = 0
+    start = 0
     PAGE = 2000
     select_list = ",".join(NEEDED)
 
     while True:
+        last = start + PAGE - 1
         resp = (
             client.table(SUPABASE_TABLE)
                   .select(select_list)
-                  .gte(COL_DATE, dstart.isoformat())
-                  .lte(COL_DATE, dend.isoformat())
+                  .gte(COL_DATE, start_s)        # >= dstart
+                  .lt(COL_DATE, end_exclusive)   #  < dend+1 día (fin inclusivo)
                   .order(COL_DATE, desc=False)
-                  .range(start, start + PAGE - 1)
+                  .range(start, last)            # paginación 0-based, inclusiva
                   .execute()
         )
         batch = pd.DataFrame(resp.data or [])
         if batch.empty:
             break
+
         frames.append(batch)
+        pages += 1
+
+        # si la página viene incompleta, ya no hay más
         if len(batch) < PAGE:
             break
+
+        # avanza a la siguiente página
         start += PAGE
 
+    # ---- Si no hubo datos, retorna vacío con columnas esperadas (evita KeyError)
     if not frames:
+        st.session_state["_last_fetch_rows"] = 0
+        st.session_state["_last_fetch_pages"] = 0
+        st.session_state["_last_fetch_err"] = None
         return pd.DataFrame(columns=NEEDED)
 
+    # ---- Concatena y normaliza tipos
     df = pd.concat(frames, ignore_index=True)
 
-    df[COL_DATE] = pd.to_datetime(df[COL_DATE], errors="coerce", utc=True).dt.tz_convert(None)
+    if COL_DATE in df.columns:
+        # parsea timestamps y quita tz para que .dt funcione de forma local
+        df[COL_DATE] = pd.to_datetime(df[COL_DATE], errors="coerce", utc=True).dt.tz_convert(None)
     df[COL_REV]  = pd.to_numeric(df[COL_REV], errors="coerce")
     df[COL_PROF] = pd.to_numeric(df[COL_PROF], errors="coerce")
-    df[COL_REP]  = df[COL_REP].astype("string").str.strip().fillna("(No rep)")
+    if COL_REP in df.columns:
+        df[COL_REP] = df[COL_REP].astype("string").str.strip().fillna("(No rep)")
 
     for c in NEEDED:
         if c not in df.columns:
             df[c] = np.nan
 
-    return df[NEEDED].dropna(subset=[COL_DATE]).reset_index(drop=True)
+    df = df[NEEDED].dropna(subset=[COL_DATE]).reset_index(drop=True)
+
+    # ---- Logging para auditar en la UI
+    st.session_state["_last_fetch_rows"] = len(df)
+    st.session_state["_last_fetch_pages"] = pages
+    st.session_state["_last_fetch_err"] = None
+
+    return df
+
 
 def apply_filters(df: pd.DataFrame, exclude_sundays: bool, paid_only: bool, exclude_neg: bool) -> pd.DataFrame:
     if df is None or df.empty:
@@ -259,6 +294,7 @@ def apply_filters(df: pd.DataFrame, exclude_sundays: bool, paid_only: bool, excl
     if exclude_neg:
         x = x[(x[COL_REV] > 0) & (x[COL_PROF] >= 0)]
     return x
+
 
 def agg_by_rep(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
@@ -376,6 +412,7 @@ else:
 scale = _scale_for_range(base_scale, factor)
 order, by_metric = _band_helpers(scale)
 
+
 g["Profit Band"]   = g["profit_sum"].apply(lambda v: _band_for(v, "profit",  order, by_metric))
 g["%Profit Band"]  = g["profit_pct"].apply(lambda v: _band_for(v, "pct",     order, by_metric))
 g["AOV Band"]      = g["aov"].apply(lambda v: _band_for(v, "aov",           order, by_metric))
@@ -484,6 +521,7 @@ else:
         st.altair_chart(chart_margin, use_container_width=True)
     else:
         st.info("Not enough reps for comparison charts.")
+
 
 daily = (
     df_f.assign(day=df_f[COL_DATE].dt.floor('D'))
