@@ -450,7 +450,8 @@ with st.sidebar:
     debug_ignore_filters = st.checkbox(
         "Debug: ignore all business filters",
         value=False,
-        help="Aplica ningún filtro (domingos, paid, negativos) para comparar con SQL.") 
+        help="Aplica ningún filtro (domingos, paid, negativos) para comparar con SQL."
+    ) 
 
     gran = st.radio("Granularity", ["Day", "Week", "Month", "Year"], horizontal=True)
     week_mode = st.radio(
@@ -703,4 +704,5 @@ if not g.empty:
         tooltip=['sales_rep', t_aov, t_pct, t_ord, t_rev, t_prof, 'MOI Overall']
     ).properties(height=340, title="AOV vs Profit % (size = orders)")
     st.altair_chart(scatter, use_container_width=True)
+
 
