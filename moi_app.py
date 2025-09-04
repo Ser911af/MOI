@@ -568,17 +568,23 @@ out_interleaved = pd.DataFrame(
     rows, columns=["SALES_REP","REVENUE_SUM","PROFIT_SUM","PROFIT_PCT","ORDERS","AOV"]
 )
 
+# ---- Styler -> HTML (sin pasar por st.dataframe) para soportar badges por celda
+sty = out_interleaved.style
+# ocultar índice: compatibilidad entre versiones de pandas
+try:
+    sty = sty.hide(axis="index")
+except Exception:
+    sty = sty.hide_index()
 sty = (
-    out_interleaved.style
-    .hide(axis="index")
-    .set_properties(**{"white-space": "normal"})
-    .set_table_styles([
-        {"selector": "th", "props": [("text-align","left"), ("font-weight","700")]},
-        {"selector": "td", "props": [("vertical-align","top"), ("padding","6px 8px")]}
-    ])
-    .format(escape=False)
+    sty.set_properties(**{"white-space": "normal"})
+       .set_table_styles([
+            {"selector": "th", "props": [("text-align","left"), ("font-weight","700")]},
+            {"selector": "td", "props": [("vertical-align","top"), ("padding","6px 8px")]}
+       ])
+    # .format(escape=False)  # <- NO usar; causa ValueError en marshaller
 )
-st.write(sty)
+html = sty.to_html(escape=False)   # <- clave: respetar HTML de badges
+st.markdown(html, unsafe_allow_html=True)
 
 # CSV plano (sin HTML)
 csv_export = g.loc[:, [
@@ -631,7 +637,6 @@ else:
     t_ord = alt.Tooltip("orders:Q", title="Orders")
 
     if not g_top.empty:
-        # Revenue by rep + (opcional) vertical goal (usa goal_unit si gran='Week'/'Month'... pero lo usual es sin línea aquí)
         chart_rev = (
             alt.Chart(g_top).mark_bar().encode(
                 x=alt.X("revenue_sum:Q", title="Revenue", axis=alt.Axis(format="$,.0f")),
@@ -726,6 +731,12 @@ if not monthly_rev.empty:
 
 # Scatter (AOV vs Profit %)
 if not g.empty:
+    t_rev = alt.Tooltip("revenue_sum:Q", title="Revenue", format="$,.0f")
+    t_prof = alt.Tooltip("profit_sum:Q", title="Profit", format="$,.0f")
+    t_pct = alt.Tooltip("profit_pct:Q", title="Profit %", format=".1%")
+    t_aov = alt.Tooltip("aov:Q", title="AOV", format="$,.0f")
+    t_ord = alt.Tooltip("orders:Q", title="Orders")
+
     scatter = (
         alt.Chart(g).mark_circle().encode(
             x=alt.X("aov:Q", title="AOV", axis=alt.Axis(format="$,.0f")),
