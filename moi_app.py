@@ -26,7 +26,7 @@ SUPABASE_KEY = _get_secret("SUPABASE_ANON_KEY")
 SUPABASE_TABLE = _get_secret("SUPABASE_TABLE", "ventas_frutto")
 LOGO_PATH = _get_secret("LOGO_PATH", "Logo/WhatsApp Image 2025-08-26 at 1.50.59 PM (1).jpeg")
 
-# ===================== PASSWORD (single user) =====================
+# ===================== PASSWORD =====================
 APP_PASSWORD = _get_secret("MOI_PASSWORD", None)
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
@@ -195,7 +195,7 @@ def count_observed_periods(df, gran, col_date):
         return max(x[col_date].dt.to_period("W-MON").nunique(), 1)
     return max((x[col_date].dt.floor("D").nunique()), 1)
 
-# ===================== DATA HELPERS =====================
+# ===================== FETCH DATA =====================
 def effective_range(d: date, granularity: str, week_mode: str = "window"):
     ts = pd.Timestamp(d)
     if granularity == "Day":
@@ -205,7 +205,7 @@ def effective_range(d: date, granularity: str, week_mode: str = "window"):
             dstart = ts.date()
             dend = (ts + pd.Timedelta(days=6)).date()
         else:
-            dstart = (ts - pd.offsets.Week(weekday=0)).date()  # Monday
+            dstart = (ts - pd.offsets.Week(weekday=0)).date()
             dend = (pd.Timestamp(dstart) + pd.Timedelta(days=6)).date()
         return dstart, dend
     if granularity == "Month":
@@ -219,10 +219,6 @@ def effective_range(d: date, granularity: str, week_mode: str = "window"):
 @st.cache_data(show_spinner=False, ttl=60)
 def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
     if not SUPABASE_URL or not SUPABASE_KEY:
-        st.session_state["_last_fetch_rows"] = 0
-        st.session_state["_last_fetch_pages"] = 0
-        st.session_state["_last_fetch_err"] = "Missing Supabase secrets"
-        st.session_state["_server_count"] = None
         return pd.DataFrame(columns=NEEDED)
 
     client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -230,116 +226,57 @@ def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
     end_exclusive = (pd.Timestamp(dend) + pd.Timedelta(days=1)).date().isoformat()
 
     frames: list[pd.DataFrame] = []
-    pages = 0
-    start = 0
     PAGE = 1000
     select_list = ",".join(NEEDED)
 
     base = (
         client.table(SUPABASE_TABLE)
-        .select(select_list, count="exact")
+        .select(select_list)
         .gte(COL_DATE, start_s)
         .lt(COL_DATE, end_exclusive)
         .order(COL_DATE, desc=False)
     )
 
-    first_last = start + PAGE - 1
-    resp = base.range(start, first_last).execute()
-    try:
-        total_count = resp.count
-    except Exception:
-        total_count = None
-
-    batch = pd.DataFrame(resp.data or [])
-    if not batch.empty:
-        frames.append(batch)
-        pages += 1
-        start += len(batch)
-
+    start = 0
     while True:
-        if total_count is not None and start >= total_count:
-            break
-        last = start + PAGE - 1
-        resp = base.range(start, last).execute()
+        resp = base.range(start, start+PAGE-1).execute()
         batch = pd.DataFrame(resp.data or [])
         if batch.empty:
             break
         frames.append(batch)
-        pages += 1
-        got = len(batch)
-        start += got
-        if got < PAGE:
+        if len(batch) < PAGE:
             break
+        start += PAGE
 
     if not frames:
-        st.session_state["_last_fetch_rows"] = 0
-        st.session_state["_last_fetch_pages"] = 0
-        st.session_state["_last_fetch_err"] = None
-        st.session_state["_server_count"] = total_count
         return pd.DataFrame(columns=NEEDED)
 
     df = pd.concat(frames, ignore_index=True)
-
     if COL_DATE in df.columns:
-        s = pd.to_datetime(df[COL_DATE], errors="coerce", utc=False)
-        try:
-            if getattr(s.dt, "tz", None) is not None:
-                s = s.dt.tz_convert(None)
-        except Exception:
-            pass
-        df[COL_DATE] = s
-
+        df[COL_DATE] = pd.to_datetime(df[COL_DATE], errors="coerce", utc=False)
     df[COL_REV] = pd.to_numeric(df[COL_REV], errors="coerce")
     df[COL_PROF] = pd.to_numeric(df[COL_PROF], errors="coerce")
     if COL_REP in df.columns:
         df[COL_REP] = df[COL_REP].astype("string").str.strip().fillna("(No rep)")
+    return df[NEEDED].dropna(subset=[COL_DATE]).reset_index(drop=True)
 
-    for c in NEEDED:
-        if c not in df.columns:
-            df[c] = np.nan
-
-    df = df[NEEDED].dropna(subset=[COL_DATE]).reset_index(drop=True)
-
-    st.session_state["_last_fetch_rows"] = len(df)
-    st.session_state["_last_fetch_pages"] = pages
-    st.session_state["_last_fetch_err"] = None
-    st.session_state["_server_count"] = total_count
-
-    return df
-
+# ===================== APPLY FILTERS (corregido) =====================
 def apply_filters(df: pd.DataFrame, exclude_sundays: bool, paid_only: bool, exclude_neg: bool) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=NEEDED)
-    for c in NEEDED:
-        if c not in df.columns:
-            df[c] = pd.Series(index=df.index, dtype="float64")
+
     if not np.issubdtype(df[COL_DATE].dtype, np.datetime64):
         df[COL_DATE] = pd.to_datetime(df[COL_DATE], errors="coerce")
+
     x = df.copy()
     if exclude_sundays:
         x = x[x[COL_DATE].dt.weekday != 6]
     if paid_only:
         x = x[x[COL_STATUS] == "Paid"]
     if exclude_neg:
-        x = x[(x[COLREV] > 0) & (x[COL_PROF] >= 0)] if COL_REV in x.columns else x
         x = x[(x[COL_REV] > 0) & (x[COL_PROF] >= 0)]
     return x
 
-def agg_by_rep(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame(columns=["sales_rep","revenue_sum","profit_sum","orders","profit_pct","aov"])
-    g = (
-        df.groupby(COL_REP, dropna=False)
-        .agg(
-            revenue_sum=(COL_REV, "sum"),
-            profit_sum=(COL_PROF, "sum"),
-            orders=(COL_INV, pd.Series.nunique),
-        )
-        .reset_index()
-    )
-    g["profit_pct"] = np.where(g["revenue_sum"] > 0, g["profit_sum"] / g["revenue_sum"], 0.0)
-    g["aov"] = np.where(g["orders"] > 0, g["revenue_sum"] / g["orders"], 0.0)
-    return g.sort_values(["revenue_sum", "orders"], ascending=[False, False])
 
 # ===================== HEADER =====================
 c1, c2 = st.columns([1, 6])
@@ -816,3 +753,4 @@ if not g.empty:
         ).properties(height=340, title="AOV vs Profit % (size = orders)")
     )
     st.altair_chart(scatter, use_container_width=True)
+
