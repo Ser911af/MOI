@@ -32,17 +32,17 @@ if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
 if not st.session_state["authenticated"]:
-    st.title("🔒 MOI – Acceso restringido")
+    st.title("🔒 MOI – Restricted Access")
     if not APP_PASSWORD:
-        st.warning("No se encontró MOI_PASSWORD en secrets/.env. Define una contraseña segura.")
-    pwd = st.text_input("Introduce la contraseña:", type="password")
-    if st.button("Entrar"):
+        st.warning("MOI_PASSWORD not found in secrets/.env. Please set a secure password.")
+    pwd = st.text_input("Enter password:", type="password")
+    if st.button("Enter"):
         if APP_PASSWORD and pwd == APP_PASSWORD:
             st.session_state["authenticated"] = True
-            st.success("Acceso concedido ✅")
+            st.success("Access granted ✅")
             st.rerun()
         else:
-            st.error("❌ Contraseña incorrecta")
+            st.error("❌ Incorrect password")
     st.stop()
 
 # ===================== COLUMN NAMES =====================
@@ -260,14 +260,12 @@ def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
         df[COL_REP] = df[COL_REP].astype("string").str.strip().fillna("(No rep)")
     return df[NEEDED].dropna(subset=[COL_DATE]).reset_index(drop=True)
 
-# ===================== APPLY FILTERS (corregido) =====================
+# ===================== APPLY FILTERS =====================
 def apply_filters(df: pd.DataFrame, exclude_sundays: bool, paid_only: bool, exclude_neg: bool) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=NEEDED)
-
     if not np.issubdtype(df[COL_DATE].dtype, np.datetime64):
         df[COL_DATE] = pd.to_datetime(df[COL_DATE], errors="coerce")
-
     x = df.copy()
     if exclude_sundays:
         x = x[x[COL_DATE].dt.weekday != 6]
@@ -277,14 +275,13 @@ def apply_filters(df: pd.DataFrame, exclude_sundays: bool, paid_only: bool, excl
         x = x[(x[COL_REV] > 0) & (x[COL_PROF] >= 0)]
     return x
 
-# ===================== AGG BY REP (añadido) =====================
+# ===================== AGG BY REP =====================
 def agg_by_rep(df: pd.DataFrame) -> pd.DataFrame:
-    """Aggrega por vendedor: revenue, profit, órdenes, %profit y AOV."""
+    """Aggregate by sales rep: revenue, profit, orders, profit %, AOV."""
     if df is None or df.empty:
         return pd.DataFrame(
             columns=["sales_rep", "revenue_sum", "profit_sum", "orders", "profit_pct", "aov"]
         )
-
     if not np.issubdtype(df[COL_DATE].dtype, np.datetime64):
         df[COL_DATE] = pd.to_datetime(df[COL_DATE], errors="coerce")
     df[COL_REV] = pd.to_numeric(df[COL_REV], errors="coerce")
@@ -300,14 +297,8 @@ def agg_by_rep(df: pd.DataFrame) -> pd.DataFrame:
           )
           .reset_index()
     )
-
-    g["profit_pct"] = np.where(
-        g["revenue_sum"] > 0, g["profit_sum"] / g["revenue_sum"], 0.0
-    )
-    g["aov"] = np.where(
-        g["orders"] > 0, g["revenue_sum"] / g["orders"], 0.0
-    )
-
+    g["profit_pct"] = np.where(g["revenue_sum"] > 0, g["profit_sum"] / g["revenue_sum"], 0.0)
+    g["aov"] = np.where(g["orders"] > 0, g["revenue_sum"] / g["orders"], 0.0)
     return g.sort_values(["revenue_sum", "orders"], ascending=[False, False]).reset_index(drop=True)
 
 # ===================== HEADER =====================
@@ -326,14 +317,16 @@ with c2:
 # ===================== SIDEBAR =====================
 with st.sidebar:
     st.markdown("### ⚙️ Debug")
-    debug_ignore_filters = st.checkbox("Debug: ignore all business filters", value=False)
+    debug_ignore_filters = st.checkbox("Ignore all business filters", value=False)
 
     gran = st.radio("Granularity", ["Day", "Week", "Month", "Year"], horizontal=True)
-    week_mode = st.radio("Week mode", ["window", "calendar"], index=0)
+    week_mode = st.radio("Week mode", ["window", "calendar"], index=0,
+                         help="window: 7 days starting at base date · calendar: Monday–Sunday")
     base_date = st.date_input("Base date", value=date.today())
 
     st.markdown("**Targets scale based on…**")
-    targets_mode = st.radio("", ["Calendar periods", "Observed periods"])
+    targets_mode = st.radio("", ["Calendar periods", "Observed periods"],
+                            help="Calendar: × count of calendar periods · Observed: × periods that contain data")
 
     st.markdown("**Business filters (apply to period):**")
     exclude_sundays = st.checkbox("Exclude Sundays", value=True)
@@ -341,21 +334,21 @@ with st.sidebar:
     exclude_neg = st.checkbox("Exclude negatives (revenue ≤ 0 or profit < 0)", value=True)
 
     # === GOAL / WATERLINE ===
-    st.markdown("### 🎯 Goal (resto del periodo)")
+    st.markdown("### 🎯 Goal (remaining)")
     goal_remaining = st.number_input(
-        "Revenue goal restante",
+        "Remaining revenue goal",
         min_value=0,
-        value=13_500_000,  # ejemplo: $13.5M
+        value=13_500_000,
         step=50_000,
-        help="Monto de revenue que falta alcanzar en el horizonte seleccionado."
+        help="Revenue left to achieve within the horizon."
     )
     default_goal_end = date(base_date.year, 12, 31)
     goal_end = st.date_input(
-        "Horizonte del objetivo (hasta cuándo)", value=default_goal_end,
-        help="La meta se reparte desde la base date hasta esta fecha."
+        "Goal horizon (until)", value=default_goal_end,
+        help="Goal is spread from base date up to this date."
     )
     use_observed_for_goal = st.checkbox(
-        "Usar 'Observed periods' para descomponer el goal (igual que targets)",
+        "Use 'Observed periods' to split the goal (same as targets)",
         value=(targets_mode == "Observed periods")
     )
 
@@ -504,7 +497,7 @@ st.subheader(
     + note
 )
 st.caption(
-    f"🎯 Goal breakdown · Day: ${goal_day:,.0f} · Week: ${goal_week:,.0f} · "
+    f"🎯 Goal split · Day: ${goal_day:,.0f} · Week: ${goal_week:,.0f} · "
     f"Month: ${goal_month:,.0f} · Year: ${goal_year:,.0f} "
     f"(periods left → D:{counts['Day']} · W:{counts['Week']} · M:{counts['Month']} · Y:{counts['Year']})"
 )
@@ -535,7 +528,7 @@ out_interleaved = pd.DataFrame(
     rows, columns=["SALES_REP","REVENUE_SUM","PROFIT_SUM","PROFIT_PCT","ORDERS","AOV"]
 )
 
-# ---- Styler -> HTML (sin pasar por st.dataframe) para soportar badges por celda
+# ---- Styler -> HTML (supports per-cell badges)
 sty = out_interleaved.style
 try:
     sty = sty.hide(axis="index")
@@ -551,7 +544,7 @@ sty = (
 html = sty.to_html(escape=False)
 st.markdown(html, unsafe_allow_html=True)
 
-# ===================== MEDIDORES (VASO) POR GRANULARIDAD =====================
+# ===================== METER BARS BY GRANULARITY =====================
 def _period_window(base_d: date, gran: str, week_mode: str):
     ts = pd.Timestamp(base_d)
     if gran == "Day":
@@ -598,7 +591,7 @@ def meter(title: str, actual: float, goal: float):
     """
     st.markdown(bar_html, unsafe_allow_html=True)
 
-# Ventanas y valores actuales por granularidad
+# Compute windows and actuals
 dS, dE = _period_window(base_date, "Day", week_mode)
 wS, wE = _period_window(base_date, "Week", week_mode)
 mS, mE = _period_window(base_date, "Month", week_mode)
@@ -609,7 +602,7 @@ actual_week  = _revenue_in_window(df_f, wS, wE)
 actual_month = _revenue_in_window(df_f, mS, mE)
 actual_year  = _revenue_in_window(df_f, yS, yE)
 
-st.markdown("### 🧪 Progress hacia la meta por granularidad")
+st.markdown("### 🧪 Progress to goal by granularity")
 c1, c2 = st.columns(2)
 with c1:
     meter(f"Day · {pd.to_datetime(dS).date()} → {pd.to_datetime(dE).date()}", actual_day, goal_day)
@@ -618,7 +611,7 @@ with c2:
     meter(f"Week · {pd.to_datetime(wS).date()} → {pd.to_datetime(wE).date()}", actual_week, goal_week)
     meter(f"Year · {pd.to_datetime(yS).date()} → {pd.to_datetime(yE).date()}", actual_year, goal_year)
 
-# ===================== CSV plano (sin HTML) =====================
+# ===================== CSV EXPORT =====================
 csv_export = g.loc[:, [
     COL_REP, "MOI Overall", "revenue_sum", "profit_sum", "profit_pct",
     "orders", "aov", "Profit Band", "%Profit Band", "AOV Band", "#Orders Band", "Revenue Band"
@@ -648,120 +641,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ===================== CHARTS =====================
-st.markdown("### 📊 Charts")
-
-n_reps = len(g)
-if n_reps == 0:
-    st.info("No data to chart for this period.")
-else:
-    if n_reps <= 3:
-        st.caption("Few reps in period: showing all (no slider).")
-        topN = n_reps
-    else:
-        topN = st.slider("Top reps by revenue", min_value=3, max_value=min(20, n_reps), value=min(10, n_reps))
-    g_top = g.head(topN)
-
-    t_rev = alt.Tooltip("revenue_sum:Q", title="Revenue", format="$,.0f")
-    t_prof = alt.Tooltip("profit_sum:Q", title="Profit", format="$,.0f")
-    t_pct = alt.Tooltip("profit_pct:Q", title="Profit %", format=".1%")
-    t_aov = alt.Tooltip("aov:Q", title="AOV", format="$,.0f")
-    t_ord = alt.Tooltip("orders:Q", title="Orders")
-
-    if not g_top.empty:
-        chart_rev = (
-            alt.Chart(g_top).mark_bar().encode(
-                x=alt.X("revenue_sum:Q", title="Revenue", axis=alt.Axis(format="$,.0f")),
-                y=alt.Y("sales_rep:N", sort="-x", title="Sales Rep"),
-                tooltip=["sales_rep", t_rev, t_prof, t_ord, t_pct, t_aov],
-            ).properties(height=320, title="Revenue by Sales Rep (Top N)")
-        )
-        st.altair_chart(chart_rev, use_container_width=True)
-
-        chart_profit = (
-            alt.Chart(g_top).mark_bar().encode(
-                x=alt.X("profit_sum:Q", title="Profit", axis=alt.Axis(format="$,.0f")),
-                y=alt.Y("sales_rep:N", sort="-x", title=None),
-                tooltip=["sales_rep", t_prof, t_pct, t_rev],
-            ).properties(height=260, title="Profit by Sales Rep (Top N)")
-        )
-        st.altair_chart(chart_profit, use_container_width=True)
-
-        chart_margin = (
-            alt.Chart(g_top).mark_bar().encode(
-                x=alt.X("profit_pct:Q", title="Profit %", axis=alt.Axis(format=".1%")),
-                y=alt.Y("sales_rep:N", sort="-x", title=None),
-                color=alt.Color(
-                    "MOI Overall:N",
-                    scale=alt.Scale(domain=list(PALETA.keys()), range=list(PALETA.values())),
-                    legend=alt.Legend(title="MOI"),
-                ),
-                tooltip=["sales_rep", t_pct, t_rev, t_prof, t_aov, t_ord, "MOI Overall"],
-            ).properties(height=260, title="Profit % by Sales Rep (Top N)")
-        )
-        st.altair_chart(chart_margin, use_container_width=True)
-
-# Daily revenue + waterline
-daily = (
-    df_f.assign(day=df_f[COL_DATE].dt.floor("D"))
-    .groupby("day", as_index=False)
-    .agg(revenue=(COL_REV, "sum"), profit=(COL_PROF, "sum"), orders=(COL_INV, pd.Series.nunique))
-)
-if not daily.empty:
-    line_rev = (
-        alt.Chart(daily).mark_line(point=True).encode(
-            x=alt.X("day:T", title="Date"),
-            y=alt.Y("revenue:Q", title="Daily revenue", axis=alt.Axis(format="$,.0f")),
-            tooltip=[alt.Tooltip("day:T", title="Date"),
-                     alt.Tooltip("revenue:Q", title="Revenue", format="$,.0f")]
-        ).properties(height=300, title=f"Daily revenue (goal/day = ${goal_day:,.0f})")
-    )
-    rule_daily = alt.Chart(pd.DataFrame({"goal":[goal_day]})).mark_rule(strokeDash=[6,3], size=2).encode(
-        y=alt.Y("goal:Q", axis=alt.Axis(format="$,.0f"))
-    )
-    st.altair_chart(line_rev + rule_daily, use_container_width=True)
-
-# Weekly revenue + waterline
-weekly = (
-    df_f.assign(week=df_f[COL_DATE].dt.to_period("W-MON").dt.start_time)
-    .groupby("week", as_index=False)
-    .agg(revenue=(COL_REV, "sum"))
-    .sort_values("week")
-)
-if not weekly.empty:
-    base_w = alt.Chart(weekly).properties(height=320, title=f"Weekly Revenue vs Goal (goal/week = ${goal_week:,.0f})")
-    bars_w = base_w.mark_bar().encode(
-        x=alt.X("week:T", title="Week (Mon–Sun)"),
-        y=alt.Y("revenue:Q", title="Revenue", axis=alt.Axis(format="$,.0f")),
-        tooltip=[alt.Tooltip("week:T", title="Week start"),
-                 alt.Tooltip("revenue:Q", title="Revenue", format="$,.0f")]
-    )
-    rule_w = alt.Chart(pd.DataFrame({"goal":[goal_week]})).mark_rule(strokeDash=[6,3], size=2).encode(
-        y=alt.Y("goal:Q", axis=alt.Axis(format="$,.0f"))
-    )
-    st.altair_chart(bars_w + rule_w, use_container_width=True)
-
-# Monthly revenue + waterline
-monthly_rev = (
-    df_f.assign(month=df_f[COL_DATE].dt.to_period("M").dt.start_time)
-    .groupby("month", as_index=False)
-    .agg(revenue=(COL_REV, "sum"))
-    .sort_values("month")
-)
-if not monthly_rev.empty:
-    base_m = alt.Chart(monthly_rev).properties(height=320, title=f"Monthly Revenue vs Goal (goal/month = ${goal_month:,.0f})")
-    bars_m = base_m.mark_bar().encode(
-        x=alt.X("month:T", title="Month"),
-        y=alt.Y("revenue:Q", title="Revenue", axis=alt.Axis(format="$,.0f")),
-        tooltip=[alt.Tooltip("month:T", title="Month"),
-                 alt.Tooltip("revenue:Q", title="Revenue", format="$,.0f")]
-    )
-    rule_m = alt.Chart(pd.DataFrame({"goal":[goal_month]})).mark_rule(strokeDash=[6,3], size=2).encode(
-        y=alt.Y("goal:Q", axis=alt.Axis(format="$,.0f"))
-    )
-    st.altair_chart(bars_m + rule_m, use_container_width=True)
-
-# Scatter (AOV vs Profit %)
+# ===================== CHARTS (scatter only) =====================
+st.markdown("### 📊 Scatter")
 if not g.empty:
     t_rev = alt.Tooltip("revenue_sum:Q", title="Revenue", format="$,.0f")
     t_prof = alt.Tooltip("profit_sum:Q", title="Profit", format="$,.0f")
@@ -781,3 +662,5 @@ if not g.empty:
         ).properties(height=340, title="AOV vs Profit % (size = orders)")
     )
     st.altair_chart(scatter, use_container_width=True)
+else:
+    st.info("Not enough data for the scatter plot.")
