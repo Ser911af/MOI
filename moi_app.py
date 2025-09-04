@@ -321,6 +321,7 @@ def apply_filters(df: pd.DataFrame, exclude_sundays: bool, paid_only: bool, excl
     if paid_only:
         x = x[x[COL_STATUS] == "Paid"]
     if exclude_neg:
+        x = x[(x[COLREV] > 0) & (x[COL_PROF] >= 0)] if COL_REV in x.columns else x
         x = x[(x[COL_REV] > 0) & (x[COL_PROF] >= 0)]
     return x
 
@@ -570,7 +571,6 @@ out_interleaved = pd.DataFrame(
 
 # ---- Styler -> HTML (sin pasar por st.dataframe) para soportar badges por celda
 sty = out_interleaved.style
-# ocultar índice: compatibilidad entre versiones de pandas
 try:
     sty = sty.hide(axis="index")
 except Exception:
@@ -581,12 +581,79 @@ sty = (
             {"selector": "th", "props": [("text-align","left"), ("font-weight","700")]},
             {"selector": "td", "props": [("vertical-align","top"), ("padding","6px 8px")]}
        ])
-    # .format(escape=False)  # <- NO usar; causa ValueError en marshaller
 )
-html = sty.to_html(escape=False)   # <- clave: respetar HTML de badges
+html = sty.to_html(escape=False)
 st.markdown(html, unsafe_allow_html=True)
 
-# CSV plano (sin HTML)
+# ===================== MEDIDORES (VASO) POR GRANULARIDAD =====================
+# Ventanas ancladas a base_date (coherentes con week_mode)
+def _period_window(base_d: date, gran: str, week_mode: str):
+    ts = pd.Timestamp(base_d)
+    if gran == "Day":
+        return ts.normalize(), ts.normalize()
+    if gran == "Week":
+        if week_mode == "calendar":
+            start = (ts - pd.offsets.Week(weekday=0)).normalize()
+            end = (start + pd.Timedelta(days=6)).normalize()
+        else:
+            start = ts.normalize()
+            end = (ts + pd.Timedelta(days=6)).normalize()
+        return start, end
+    if gran == "Month":
+        p = ts.to_period("M")
+        return p.start_time.normalize(), p.end_time.normalize()
+    if gran == "Year":
+        p = ts.to_period("Y")
+        return p.start_time.normalize(), p.end_time.normalize()
+    return ts.normalize(), ts.normalize()
+
+def _revenue_in_window(df_scope: pd.DataFrame, start_ts, end_ts):
+    mask = (df_scope[COL_DATE] >= start_ts) & (df_scope[COL_DATE] <= end_ts)
+    return float(df_scope.loc[mask, COL_REV].sum())
+
+def _pct(actual: float, goal: float) -> float:
+    try:
+        return max(0.0, min(1.0, actual / goal)) if goal and np.isfinite(goal) else 0.0
+    except Exception:
+        return 0.0
+
+def meter(title: str, actual: float, goal: float):
+    pct = _pct(actual, goal)
+    pct_label = f"{pct*100:,.1f}%"
+    bar_html = f"""
+    <div style="margin:6px 0 2px 0;font-weight:700">{title}</div>
+    <div style="background:#eee;border-radius:10px;overflow:hidden;height:22px;border:1px solid #ddd;">
+      <div style="width:{pct*100:.4f}%;height:100%;
+                  background:linear-gradient(90deg,#B7B7B7,#7F7F7F,#E06666,#A80E0E,#C00000);
+                  transition:width .4s ease"></div>
+    </div>
+    <div style="font-size:12px;color:#444;margin-top:2px">
+      {fmt_money(actual,0)} / {fmt_money(goal,0)} · <b>{pct_label}</b>
+    </div>
+    """
+    st.markdown(bar_html, unsafe_allow_html=True)
+
+# Calcula ventanas y valores actuales por granularidad
+dS, dE = _period_window(base_date, "Day", week_mode)
+wS, wE = _period_window(base_date, "Week", week_mode)
+mS, mE = _period_window(base_date, "Month", week_mode)
+yS, yE = _period_window(base_date, "Year", week_mode)
+
+actual_day   = _revenue_in_window(df_f, dS, dE)
+actual_week  = _revenue_in_window(df_f, wS, wE)
+actual_month = _revenue_in_window(df_f, mS, mE)
+actual_year  = _revenue_in_window(df_f, yS, yE)
+
+st.markdown("### 🧪 Progress hacia la meta por granularidad")
+c1, c2 = st.columns(2)
+with c1:
+    meter(f"Day · {pd.to_datetime(dS).date()} → {pd.to_datetime(dE).date()}", actual_day, goal_day)
+    meter(f"Month · {pd.to_datetime(mS).date()} → {pd.to_datetime(mE).date()}", actual_month, goal_month)
+with c2:
+    meter(f"Week · {pd.to_datetime(wS).date()} → {pd.to_datetime(wE).date()}", actual_week, goal_week)
+    meter(f"Year · {pd.to_datetime(yS).date()} → {pd.to_datetime(yE).date()}", actual_year, goal_year)
+
+# ===================== CSV plano (sin HTML) =====================
 csv_export = g.loc[:, [
     COL_REP, "MOI Overall", "revenue_sum", "profit_sum", "profit_pct",
     "orders", "aov", "Profit Band", "%Profit Band", "AOV Band", "#Orders Band", "Revenue Band"
