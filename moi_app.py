@@ -10,15 +10,10 @@ from dotenv import load_dotenv
 from supabase import create_client
 
 # ===================== CONFIG =====================
-
 st.set_page_config(page_title="Frutto – MOI Dashboard", layout="wide")
 load_dotenv()
 
-
 def _get_secret(name: str, default=None):
-    """Reads first from st.secrets (Streamlit Cloud), then from .env.
-    Falls back to provided default.
-    """
     try:
         if hasattr(st, "secrets") and name in st.secrets:
             return st.secrets[name]
@@ -26,27 +21,20 @@ def _get_secret(name: str, default=None):
         pass
     return os.getenv(name, default)
 
-
 SUPABASE_URL = _get_secret("SUPABASE_URL")
 SUPABASE_KEY = _get_secret("SUPABASE_ANON_KEY")
 SUPABASE_TABLE = _get_secret("SUPABASE_TABLE", "ventas_frutto")
-LOGO_PATH = _get_secret(
-    "LOGO_PATH", "Logo/WhatsApp Image 2025-08-26 at 1.50.59 PM (1).jpeg"
-)
+LOGO_PATH = _get_secret("LOGO_PATH", "Logo/WhatsApp Image 2025-08-26 at 1.50.59 PM (1).jpeg")
 
 # ===================== PASSWORD (single user) =====================
-# Define the password in .env or in .streamlit/secrets.toml as MOI_PASSWORD
 APP_PASSWORD = _get_secret("MOI_PASSWORD", None)
-
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
 
 if not st.session_state["authenticated"]:
     st.title("🔒 MOI – Acceso restringido")
     if not APP_PASSWORD:
-        st.warning(
-            "No se encontró MOI_PASSWORD en secrets/.env. Define una contraseña segura."
-        )
+        st.warning("No se encontró MOI_PASSWORD en secrets/.env. Define una contraseña segura.")
     pwd = st.text_input("Introduce la contraseña:", type="password")
     if st.button("Entrar"):
         if APP_PASSWORD and pwd == APP_PASSWORD:
@@ -55,27 +43,23 @@ if not st.session_state["authenticated"]:
             st.rerun()
         else:
             st.error("❌ Contraseña incorrecta")
-    st.stop()  # detiene la app si no está autenticado
+    st.stop()
 
-# ===================== APP NORMAL (solo visible tras login) =====================
-
+# ===================== COLUMN NAMES =====================
 COL_DATE = "reqs_date"
 COL_REP = "sales_rep"
 COL_INV = "invoice_num"
 COL_REV = "total_revenue"
 COL_PROF = "total_profit_usd"
 COL_STATUS = "invoice_payment_status"
-
 NEEDED = [COL_DATE, COL_REP, COL_INV, COL_REV, COL_PROF, COL_STATUS]
 
-# ===== Formatting
-
+# ===================== FORMATTING =====================
 def fmt_money(v, decimals: int = 0):
     try:
         return f"${v:,.{decimals}f}"
     except Exception:
         return v
-
 
 def fmt_pct_unit(v, decimals: int = 1):
     try:
@@ -83,9 +67,7 @@ def fmt_pct_unit(v, decimals: int = 1):
     except Exception:
         return v
 
-
-# ===== MOI Palette
-
+# ===================== MOI PALETTE =====================
 PALETA = {
     "Remarkable": "#C00000",
     "Excellent": "#A80E0E",
@@ -95,43 +77,25 @@ PALETA = {
     "Poor": "#B7B7B7",
 }
 
-
-# ===== Color helpers for Styler cells (bands and MOI Overall)
-
 def _contrast(hex_color: str) -> str:
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
     return "#FFFFFF" if lum < 140 else "#000000"
 
+def _badge_html(text: str, bg: str) -> str:
+    fg = _contrast(bg)
+    return (
+        f"<div style='display:block;text-align:center;"
+        f"background:{bg};color:{fg};font-weight:700;"
+        f"padding:2px 8px;border-radius:10px;line-height:1.15'>{text}</div>"
+    )
 
-def style_moi_bands(df: pd.DataFrame):
-    band_cols = [
-        "Profit Band",
-        "%Profit Band",
-        "AOV Band",
-        "#Orders Band",
-        "Revenue Band",
-        "MOI Overall",
-    ]
-    sty = df.style
-    for c in band_cols:
-        if c in df.columns:
-            sty = sty.map(
-                lambda v: (
-                    ""
-                    if pd.isna(v)
-                    else f"background-color:{PALETA.get(v, '#FFFFFF')};"
-                    f"color:{_contrast(PALETA.get(v, '#FFFFFF'))};"
-                    "font-weight:600;"
-                ),
-                subset=pd.IndexSlice[:, [c]],
-            )
-    return sty
+def _band_badge(name: str) -> str:
+    bg = PALETA.get(name, "#E5E5E5")
+    return _badge_html(name, bg)
 
-
-# ===== Base MOI scales
-
+# ===================== MOI SCALES =====================
 MOI_SCALES = {
     "Year": [
         ("Remarkable", 2000000, 0.20, 11000, 900, 10000000),
@@ -167,15 +131,11 @@ MOI_SCALES = {
     ],
 }
 
-
-# ===== MOI helpers
-
 def _scale_for_range(base_scale, factor: float):
     return [
         (name, p * factor, pct, aov, ords * factor, rev * factor)
         for (name, p, pct, aov, ords, rev) in base_scale
     ]
-
 
 def _band_helpers(scale):
     order = [t[0] for t in scale]
@@ -188,14 +148,12 @@ def _band_helpers(scale):
     }
     return order, by_metric
 
-
 def _band_for(value, metric, order, by_metric):
     th = by_metric[metric]
     for name in order:
         if value >= th[name]:
             return name
     return order[-1]
-
 
 def class_moi(row, scale, majority_required: int = 3, reinforce_revenue: bool = True):
     for name, min_profit, min_pct, min_aov, min_orders, min_rev in scale:
@@ -213,7 +171,6 @@ def class_moi(row, scale, majority_required: int = 3, reinforce_revenue: bool = 
                 return name
     return scale[-1][0]
 
-
 def count_calendar_periods(dstart, dend, gran):
     s = pd.Timestamp(dstart)
     e = pd.Timestamp(dend)
@@ -224,8 +181,7 @@ def count_calendar_periods(dstart, dend, gran):
     if gran == "Week":
         return max(len(pd.period_range(s, e, freq="W-MON")), 1)
     days = pd.date_range(s, e, freq="D")
-    return max(int((days.weekday != 6).sum()), 1)  # exclude Sundays when counting days
-
+    return max(int((days.weekday != 6).sum()), 1)
 
 def count_observed_periods(df, gran, col_date):
     if df.empty:
@@ -239,9 +195,7 @@ def count_observed_periods(df, gran, col_date):
         return max(x[col_date].dt.to_period("W-MON").nunique(), 1)
     return max((x[col_date].dt.floor("D").nunique()), 1)
 
-
 # ===================== DATA HELPERS =====================
-
 def effective_range(d: date, granularity: str, week_mode: str = "window"):
     ts = pd.Timestamp(d)
     if granularity == "Day":
@@ -262,8 +216,6 @@ def effective_range(d: date, granularity: str, week_mode: str = "window"):
         return p.start_time.date(), p.end_time.date()
     return ts.date(), ts.date()
 
-
-# ====== NEW: fetch_server_filtered_v2 con conteo exacto y manejo de tz ======
 @st.cache_data(show_spinner=False, ttl=60)
 def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -274,19 +226,15 @@ def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
         return pd.DataFrame(columns=NEEDED)
 
     client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
     start_s = pd.Timestamp(dstart).date().isoformat()
     end_exclusive = (pd.Timestamp(dend) + pd.Timedelta(days=1)).date().isoformat()
 
     frames: list[pd.DataFrame] = []
     pages = 0
     start = 0
-    # ⚠️ Supabase/PostgREST limita el tamaño de rango por request a ~1000 filas.
-    # Si pedimos 2000, devuelve 1000 y al sumar 2000 saltamos 1000 filas -> pérdida de datos.
     PAGE = 1000
     select_list = ",".join(NEEDED)
 
-    # Primera llamada: obtener count exacto y la primera página
     base = (
         client.table(SUPABASE_TABLE)
         .select(select_list, count="exact")
@@ -306,9 +254,8 @@ def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
     if not batch.empty:
         frames.append(batch)
         pages += 1
-        start += len(batch)  # avanzamos exactamente lo que recibimos
+        start += len(batch)
 
-    # Paginamos hasta consumir total_count (si lo sabemos) o hasta que vengan páginas vacías/pequeñas
     while True:
         if total_count is not None and start >= total_count:
             break
@@ -322,7 +269,6 @@ def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
         got = len(batch)
         start += got
         if got < PAGE:
-            # última página
             break
 
     if not frames:
@@ -334,7 +280,6 @@ def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
 
     df = pd.concat(frames, ignore_index=True)
 
-    # Fecha: evitar desplazamientos por tz
     if COL_DATE in df.columns:
         s = pd.to_datetime(df[COL_DATE], errors="coerce", utc=False)
         try:
@@ -362,91 +307,9 @@ def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
 
     return df
 
-
-# ====== NEW fetch_server_filtered (inclusive end via lt(dend+1), TTL, logging) ======
-@st.cache_data(show_spinner=False, ttl=60)  # pequeño TTL para evitar cache eterno
-def fetch_server_filtered(dstart: date, dend: date) -> pd.DataFrame:
-    # ---- Guard clause: si faltan secrets, devolvemos DF vacío con columnas esperadas
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        st.session_state["_last_fetch_rows"] = 0
-        st.session_state["_last_fetch_pages"] = 0
-        st.session_state["_last_fetch_err"] = "Missing Supabase secrets"
-        return pd.DataFrame(columns=NEEDED)
-
-    client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-    # ---- Ventana de fechas inclusiva y robusta (funciona con DATE o TIMESTAMP):
-    # >= dstart  y  < (dend + 1 día)  => incluye TODO el último día aunque haya horas
-    start_s = pd.Timestamp(dstart).date().isoformat()
-    end_exclusive = (pd.Timestamp(dend) + pd.Timedelta(days=1)).date().isoformat()
-
-    frames = []
-    pages = 0
-    start = 0
-    PAGE = 2000
-    select_list = ",".join(NEEDED)
-
-    while True:
-        last = start + PAGE - 1
-        resp = (
-            client.table(SUPABASE_TABLE)
-            .select(select_list)
-            .gte(COL_DATE, start_s)  # >= dstart
-            .lt(COL_DATE, end_exclusive)  #  < dend+1 día (fin inclusivo)
-            .order(COL_DATE, desc=False)
-            .range(start, last)  # paginación 0-based, inclusiva
-            .execute()
-        )
-        batch = pd.DataFrame(resp.data or [])
-        if batch.empty:
-            break
-
-        frames.append(batch)
-        pages += 1
-
-        # si la página viene incompleta, ya no hay más
-        if len(batch) < PAGE:
-            break
-
-        # avanza a la siguiente página
-        start += PAGE
-
-    # ---- Si no hubo datos, retorna vacío con columnas esperadas (evita KeyError)
-    if not frames:
-        st.session_state["_last_fetch_rows"] = 0
-        st.session_state["_last_fetch_pages"] = 0
-        st.session_state["_last_fetch_err"] = None
-        return pd.DataFrame(columns=NEEDED)
-
-    # ---- Concatena y normaliza tipos
-    df = pd.concat(frames, ignore_index=True)
-
-    if COL_DATE in df.columns:
-        # parsea timestamps y quita tz para que .dt funcione de forma local
-        df[COL_DATE] = pd.to_datetime(df[COL_DATE], errors="coerce", utc=True).dt.tz_convert(None)
-    df[COL_REV] = pd.to_numeric(df[COL_REV], errors="coerce")
-    df[COL_PROF] = pd.to_numeric(df[COL_PROF], errors="coerce")
-    if COL_REP in df.columns:
-        df[COL_REP] = df[COL_REP].astype("string").str.strip().fillna("(No rep)")
-
-    for c in NEEDED:
-        if c not in df.columns:
-            df[c] = np.nan
-
-    df = df[NEEDED].dropna(subset=[COL_DATE]).reset_index(drop=True)
-
-    # ---- Logging para auditar en la UI
-    st.session_state["_last_fetch_rows"] = len(df)
-    st.session_state["_last_fetch_pages"] = pages
-    st.session_state["_last_fetch_err"] = None
-
-    return df
-
-
 def apply_filters(df: pd.DataFrame, exclude_sundays: bool, paid_only: bool, exclude_neg: bool) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=NEEDED)
-    # Ensure required columns exist and correct dtype
     for c in NEEDED:
         if c not in df.columns:
             df[c] = pd.Series(index=df.index, dtype="float64")
@@ -461,19 +324,9 @@ def apply_filters(df: pd.DataFrame, exclude_sundays: bool, paid_only: bool, excl
         x = x[(x[COL_REV] > 0) & (x[COL_PROF] >= 0)]
     return x
 
-
 def agg_by_rep(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
-        return pd.DataFrame(
-            columns=[
-                "sales_rep",
-                "revenue_sum",
-                "profit_sum",
-                "orders",
-                "profit_pct",
-                "aov",
-            ]
-        )
+        return pd.DataFrame(columns=["sales_rep","revenue_sum","profit_sum","orders","profit_pct","aov"])
     g = (
         df.groupby(COL_REP, dropna=False)
         .agg(
@@ -483,72 +336,65 @@ def agg_by_rep(df: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
-    g["profit_pct"] = np.where(
-        g["revenue_sum"] > 0, g["profit_sum"] / g["revenue_sum"], 0.0
-    )
+    g["profit_pct"] = np.where(g["revenue_sum"] > 0, g["profit_sum"] / g["revenue_sum"], 0.0)
     g["aov"] = np.where(g["orders"] > 0, g["revenue_sum"] / g["orders"], 0.0)
     return g.sort_values(["revenue_sum", "orders"], ascending=[False, False])
 
-
-# ===================== UI – Header =====================
-
-# Header with logo
+# ===================== HEADER =====================
 c1, c2 = st.columns([1, 6])
 with c1:
     logo_file = Path(LOGO_PATH)
     if logo_file.exists():
         try:
-            from PIL import Image  # optional dependency
-
+            from PIL import Image
             st.image(Image.open(logo_file), use_container_width=True)
         except Exception:
             st.empty()
 with c2:
     st.title("MOI – Sales Rep View (server-side date filter)")
 
-# ===================== Sidebar =====================
-
+# ===================== SIDEBAR =====================
 with st.sidebar:
     st.markdown("### ⚙️ Debug")
-    debug_ignore_filters = st.checkbox(
-        "Debug: ignore all business filters",
-        value=False,
-        help="Aplica ningún filtro (domingos, paid, negativos) para comparar con SQL.",
-    )
+    debug_ignore_filters = st.checkbox("Debug: ignore all business filters", value=False)
 
     gran = st.radio("Granularity", ["Day", "Week", "Month", "Year"], horizontal=True)
-    week_mode = st.radio(
-        "Week mode",
-        ["window", "calendar"],
-        index=0,
-        help="window: 7 days starting from the selected date · calendar: Monday to Sunday",
-    )
+    week_mode = st.radio("Week mode", ["window", "calendar"], index=0)
     base_date = st.date_input("Base date", value=date.today())
 
     st.markdown("**Targets scale based on…**")
-    targets_mode = st.radio(
-        "", ["Calendar periods", "Observed periods"],
-        help=(
-            "Calendar: targets × number of calendar periods in range · Observed: × periods with data"
-        ),
-    )
+    targets_mode = st.radio("", ["Calendar periods", "Observed periods"])
 
     st.markdown("**Business filters (apply to period):**")
     exclude_sundays = st.checkbox("Exclude Sundays", value=True)
     paid_only = st.checkbox("Only invoices with status 'Paid'", value=False)
-    exclude_neg = st.checkbox(
-        "Exclude negatives (revenue ≤ 0 or profit < 0)", value=True
+    exclude_neg = st.checkbox("Exclude negatives (revenue ≤ 0 or profit < 0)", value=True)
+
+    # === GOAL / WATERLINE ===
+    st.markdown("### 🎯 Goal (resto del periodo)")
+    goal_remaining = st.number_input(
+        "Revenue goal restante",
+        min_value=0,
+        value=13_500_000,  # ejemplo: $13.5M
+        step=50_000,
+        help="Monto de revenue que falta alcanzar en el horizonte seleccionado."
+    )
+    default_goal_end = date(base_date.year, 12, 31)
+    goal_end = st.date_input(
+        "Horizonte del objetivo (hasta cuándo)", value=default_goal_end,
+        help="La meta se reparte desde la base date hasta esta fecha."
+    )
+    use_observed_for_goal = st.checkbox(
+        "Usar 'Observed periods' para descomponer el goal (igual que targets)",
+        value=(targets_mode == "Observed periods")
     )
 
     if st.button("Refresh"):
         st.rerun()
 
-# Compute effective range
-
+# ===================== RANGE + HEALTH =====================
 dstart_eff, dend_eff = effective_range(base_date, gran, week_mode)
 st.caption(f"**Effective range:** {dstart_eff} → {dend_eff}")
-
-# ===================== Health Check =====================
 
 with st.expander("🩺 Health check", expanded=False):
     st.write(
@@ -560,13 +406,10 @@ with st.expander("🩺 Health check", expanded=False):
         }
     )
 
-# ===================== Fetch & filters =====================
-
+# ===================== FETCH & FILTERS =====================
 with st.spinner("Querying Supabase…"):
     df_raw = fetch_server_filtered_v2(dstart_eff, dend_eff)
     df_f = apply_filters(df_raw, exclude_sundays, paid_only, exclude_neg)
-
-# ===================== Diagnostics =====================
 
 with st.expander("🔎 Diagnostics", expanded=False):
     st.write(
@@ -586,40 +429,25 @@ with st.expander("🔎 Diagnostics", expanded=False):
             "pages": st.session_state.get("_last_fetch_pages"),
         }
     )
-    if st.session_state.get("_server_count") is not None:
-        delta = (st.session_state.get("_server_count") or 0) - (
-            st.session_state.get("_last_fetch_rows") or 0
-        )
-        if delta != 0:
-            st.warning(
-                f"⚠️ Server count says {st.session_state['_server_count']} rows for the range, but we fetched {st.session_state['_last_fetch_rows']}. Δ = {delta}. Revisa filtros, paginación o tipos de fecha."
-            )
-
     if not df_f.empty:
-        monthly = (
+        monthly_diag = (
             df_f.assign(month=df_f[COL_DATE].dt.to_period("M").dt.start_time)
-            .groupby("month")
-            .size()
-            .reset_index(name="rows")
+            .groupby("month").size().reset_index(name="rows")
         )
-        monthly["month"] = monthly["month"].dt.strftime("%Y-%m-01")
+        monthly_diag["month"] = monthly_diag["month"].dt.strftime("%Y-%m-01")
         st.caption("Rows per month (after filters):")
-        st.table(monthly)
+        st.table(monthly_diag)
         st.caption("Sample rows:")
         st.dataframe(df_f.head(15), use_container_width=True)
 
-# ===================== Ranking + MOI =====================
-
+# ===================== STOP IF NO DATA =====================
 if df_f.empty:
-    st.warning(
-        "No data for this period with the selected filters. Try widening the range or unchecking filters."
-    )
+    st.warning("No data for this period with the selected filters.")
     st.stop()
 
-
+# ===================== AGG + MOI =====================
 g = agg_by_rep(df_f)
 
-# Targets factor & bands
 base_scale = MOI_SCALES[gran]
 if targets_mode == "Calendar periods":
     factor = count_calendar_periods(dstart_eff, dend_eff, gran)
@@ -629,42 +457,77 @@ else:
 scale = _scale_for_range(base_scale, factor)
 order, by_metric = _band_helpers(scale)
 
-
-g["Profit Band"] = g["profit_sum"].apply(
-    lambda v: _band_for(v, "profit", order, by_metric)
-)
+g["Profit Band"] = g["profit_sum"].apply(lambda v: _band_for(v, "profit", order, by_metric))
 g["%Profit Band"] = g["profit_pct"].apply(lambda v: _band_for(v, "pct", order, by_metric))
 g["AOV Band"] = g["aov"].apply(lambda v: _band_for(v, "aov", order, by_metric))
 g["#Orders Band"] = g["orders"].apply(lambda v: _band_for(v, "orders", order, by_metric))
-g["Revenue Band"] = g["revenue_sum"].apply(
-    lambda v: _band_for(v, "revenue", order, by_metric)
-)
+g["Revenue Band"] = g["revenue_sum"].apply(lambda v: _band_for(v, "revenue", order, by_metric))
 g["MOI Overall"] = g.apply(lambda r: class_moi(r, scale), axis=1)
 
 rank_map = {name: i for i, name in enumerate([t[0] for t in scale])}
 g["moi_rank"] = g["MOI Overall"].map(rank_map)
-g = g.sort_values(["moi_rank", "revenue_sum"], ascending=[True, False]).reset_index(
-    drop=True
-)
+g = g.sort_values(["moi_rank", "revenue_sum"], ascending=[True, False]).reset_index(drop=True)
 
-# ---- formatted output
-out = pd.DataFrame(
-    {
-        "SALES_REP": g[COL_REP],
-        "MOI Overall": g["MOI Overall"],
-        "REVENUE_SUM": g["revenue_sum"].map(lambda x: fmt_money(x, 0)),
-        "PROFIT_SUM": g["profit_sum"].map(lambda x: fmt_money(x, 0)),
-        "PROFIT_PCT": g["profit_pct"].map(lambda x: fmt_pct_unit(x, 1)),
-        "ORDERS": g["orders"].astype(int),
-        "AOV": g["aov"].map(lambda x: fmt_money(x, 0)),
-        "Profit Band": g["Profit Band"],
-        "%Profit Band": g["%Profit Band"],
-        "AOV Band": g["AOV Band"],
-        "#Orders Band": g["#Orders Band"],
-        "Revenue Band": g["Revenue Band"],
+# ===================== GOAL / WATERLINE BREAKDOWN =====================
+def periods_between(dstart: date, dend: date, gran: str, exclude_sun: bool) -> int:
+    s = pd.Timestamp(dstart)
+    e = pd.Timestamp(dend)
+    if gran == "Year":
+        return max(len(pd.period_range(s, e, freq="Y")), 1)
+    if gran == "Month":
+        return max(len(pd.period_range(s, e, freq="M")), 1)
+    if gran == "Week":
+        return max(len(pd.period_range(s, e, freq="W-MON")), 1)
+    days = pd.date_range(s, e, freq="D")
+    if exclude_sun:
+        return max(int((days.weekday != 6).sum()), 1)
+    return max(len(days), 1)
+
+def goal_per_period(goal_remaining: float,
+                    base_d: date,
+                    end_d: date,
+                    gran: str,
+                    use_observed: bool,
+                    df_scope: pd.DataFrame,
+                    col_date: str,
+                    exclude_sun: bool):
+    if use_observed:
+        def _obs(gr):
+            mask = (df_scope[col_date] >= pd.Timestamp(base_d)) & (df_scope[col_date] <= pd.Timestamp(end_d))
+            return count_observed_periods(df_scope[mask], gr, col_date)
+        n_day = _obs("Day"); n_week = _obs("Week"); n_month = _obs("Month"); n_year = _obs("Year")
+    else:
+        n_day = periods_between(base_d, end_d, "Day", exclude_sun)
+        n_week = periods_between(base_d, end_d, "Week", exclude_sun)
+        n_month = periods_between(base_d, end_d, "Month", exclude_sun)
+        n_year = periods_between(base_d, end_d, "Year", exclude_sun)
+    n_day = max(n_day,1); n_week = max(n_week,1); n_month = max(n_month,1); n_year = max(n_year,1)
+    breakdown = {
+        "Day": goal_remaining / n_day,
+        "Week": goal_remaining / n_week,
+        "Month": goal_remaining / n_month,
+        "Year": goal_remaining / n_year,
+        "_counts": {"Day": n_day, "Week": n_week, "Month": n_month, "Year": n_year},
     }
-)
+    return breakdown[gran], breakdown
 
+goal_unit, goal_breakdown = goal_per_period(
+    goal_remaining=goal_remaining,
+    base_d=base_date,
+    end_d=goal_end,
+    gran=gran,
+    use_observed=use_observed_for_goal,
+    df_scope=df_f,
+    col_date=COL_DATE,
+    exclude_sun=exclude_sundays
+)
+goal_day   = goal_breakdown["Day"]
+goal_week  = goal_breakdown["Week"]
+goal_month = goal_breakdown["Month"]
+goal_year  = goal_breakdown["Year"]
+counts     = goal_breakdown["_counts"]
+
+# ===================== TITLE =====================
 note = f" · targets × {factor} {gran.lower()}" + ("s" if factor != 1 else "")
 st.subheader(
     f"Sales Rep — {dstart_eff} → {dend_eff}"
@@ -673,20 +536,70 @@ st.subheader(
     + (" · negatives excluded" if exclude_neg else "")
     + note
 )
+st.caption(
+    f"🎯 Goal breakdown · Day: ${goal_day:,.0f} · Week: ${goal_week:,.0f} · "
+    f"Month: ${goal_month:,.0f} · Year: ${goal_year:,.0f} "
+    f"(periods left → D:{counts['Day']} · W:{counts['Week']} · M:{counts['Month']} · Y:{counts['Year']})"
+)
 
-# Render styled table
-styled_out = style_moi_bands(out)
-st.dataframe(styled_out, use_container_width=True)
+# ===================== TABLE (BAND ROW + DATA ROW) =====================
+rows = []
+for _, r in g.iterrows():
+    band_row = {
+        "SALES_REP": _band_badge(r["MOI Overall"]),        # badge en primera col
+        "REVENUE_SUM": _band_badge(r["Revenue Band"]),
+        "PROFIT_SUM": _band_badge(r["Profit Band"]),
+        "PROFIT_PCT": _band_badge(r["%Profit Band"]),
+        "ORDERS": _band_badge(r["#Orders Band"]),
+        "AOV": _band_badge(r["AOV Band"]),
+    }
+    rows.append(band_row)
+    data_row = {
+        "SALES_REP": r[COL_REP],
+        "REVENUE_SUM": fmt_money(r["revenue_sum"], 0),
+        "PROFIT_SUM": fmt_money(r["profit_sum"], 0),
+        "PROFIT_PCT": fmt_pct_unit(r["profit_pct"], 1),
+        "ORDERS": int(r["orders"]),
+        "AOV": fmt_money(r["aov"], 0),
+    }
+    rows.append(data_row)
 
-# CSV download (unstyled)
+out_interleaved = pd.DataFrame(
+    rows, columns=["SALES_REP","REVENUE_SUM","PROFIT_SUM","PROFIT_PCT","ORDERS","AOV"]
+)
+
+sty = (
+    out_interleaved.style
+    .hide(axis="index")
+    .set_properties(**{"white-space": "normal"})
+    .set_table_styles([
+        {"selector": "th", "props": [("text-align","left"), ("font-weight","700")]},
+        {"selector": "td", "props": [("vertical-align","top"), ("padding","6px 8px")]}
+    ])
+    .format(escape=False)
+)
+st.write(sty)
+
+# CSV plano (sin HTML)
+csv_export = g.loc[:, [
+    COL_REP, "MOI Overall", "revenue_sum", "profit_sum", "profit_pct",
+    "orders", "aov", "Profit Band", "%Profit Band", "AOV Band", "#Orders Band", "Revenue Band"
+]].rename(columns={
+    COL_REP: "SALES_REP",
+    "revenue_sum": "REVENUE_SUM",
+    "profit_sum": "PROFIT_SUM",
+    "profit_pct": "PROFIT_PCT",
+    "orders": "ORDERS",
+    "aov": "AOV"
+})
 st.download_button(
     "⬇️ Download CSV",
-    out.to_csv(index=False).encode("utf-8"),
+    csv_export.to_csv(index=False).encode("utf-8"),
     file_name=f"moi_salesrep_{pd.to_datetime(dstart_eff):%Y%m%d}_{pd.to_datetime(dend_eff):%Y%m%d}.csv",
     mime="text/csv",
 )
 
-# Color legend
+# ===================== LEGEND =====================
 st.caption("MOI Legend:")
 st.markdown(
     "".join(
@@ -697,8 +610,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ===================== Charts =====================
-
+# ===================== CHARTS =====================
 st.markdown("### 📊 Charts")
 
 n_reps = len(g)
@@ -709,10 +621,7 @@ else:
         st.caption("Few reps in period: showing all (no slider).")
         topN = n_reps
     else:
-        topN = st.slider(
-            "Top reps by revenue", min_value=3, max_value=min(20, n_reps), value=min(10, n_reps)
-        )
-
+        topN = st.slider("Top reps by revenue", min_value=3, max_value=min(20, n_reps), value=min(10, n_reps))
     g_top = g.head(topN)
 
     t_rev = alt.Tooltip("revenue_sum:Q", title="Revenue", format="$,.0f")
@@ -722,125 +631,110 @@ else:
     t_ord = alt.Tooltip("orders:Q", title="Orders")
 
     if not g_top.empty:
+        # Revenue by rep + (opcional) vertical goal (usa goal_unit si gran='Week'/'Month'... pero lo usual es sin línea aquí)
         chart_rev = (
-            alt.Chart(g_top)
-            .mark_bar()
-            .encode(
+            alt.Chart(g_top).mark_bar().encode(
                 x=alt.X("revenue_sum:Q", title="Revenue", axis=alt.Axis(format="$,.0f")),
                 y=alt.Y("sales_rep:N", sort="-x", title="Sales Rep"),
                 tooltip=["sales_rep", t_rev, t_prof, t_ord, t_pct, t_aov],
-            )
-            .properties(height=320, title="Revenue by Sales Rep (Top N)")
+            ).properties(height=320, title="Revenue by Sales Rep (Top N)")
         )
         st.altair_chart(chart_rev, use_container_width=True)
 
         chart_profit = (
-            alt.Chart(g_top)
-            .mark_bar()
-            .encode(
+            alt.Chart(g_top).mark_bar().encode(
                 x=alt.X("profit_sum:Q", title="Profit", axis=alt.Axis(format="$,.0f")),
                 y=alt.Y("sales_rep:N", sort="-x", title=None),
                 tooltip=["sales_rep", t_prof, t_pct, t_rev],
-            )
-            .properties(height=260, title="Profit by Sales Rep (Top N)")
+            ).properties(height=260, title="Profit by Sales Rep (Top N)")
         )
         st.altair_chart(chart_profit, use_container_width=True)
 
         chart_margin = (
-            alt.Chart(g_top)
-            .mark_bar()
-            .encode(
+            alt.Chart(g_top).mark_bar().encode(
                 x=alt.X("profit_pct:Q", title="Profit %", axis=alt.Axis(format=".1%")),
                 y=alt.Y("sales_rep:N", sort="-x", title=None),
                 color=alt.Color(
                     "MOI Overall:N",
-                    scale=alt.Scale(
-                        domain=list(PALETA.keys()), range=list(PALETA.values())
-                    ),
+                    scale=alt.Scale(domain=list(PALETA.keys()), range=list(PALETA.values())),
                     legend=alt.Legend(title="MOI"),
                 ),
-                tooltip=[
-                    "sales_rep",
-                    t_pct,
-                    t_rev,
-                    t_prof,
-                    t_aov,
-                    t_ord,
-                    "MOI Overall",
-                ],
-            )
-            .properties(height=260, title="Profit % by Sales Rep (Top N)")
+                tooltip=["sales_rep", t_pct, t_rev, t_prof, t_aov, t_ord, "MOI Overall"],
+            ).properties(height=260, title="Profit % by Sales Rep (Top N)")
         )
         st.altair_chart(chart_margin, use_container_width=True)
-    else:
-        st.info("Not enough reps for comparison charts.")
 
-
+# Daily revenue + waterline
 daily = (
     df_f.assign(day=df_f[COL_DATE].dt.floor("D"))
     .groupby("day", as_index=False)
-    .agg(
-        revenue=(COL_REV, "sum"),
-        profit=(COL_PROF, "sum"),
-        orders=(COL_INV, pd.Series.nunique),
-    )
+    .agg(revenue=(COL_REV, "sum"), profit=(COL_PROF, "sum"), orders=(COL_INV, pd.Series.nunique))
 )
 if not daily.empty:
     line_rev = (
-        alt.Chart(daily)
-        .mark_line(point=True)
-        .encode(
+        alt.Chart(daily).mark_line(point=True).encode(
             x=alt.X("day:T", title="Date"),
             y=alt.Y("revenue:Q", title="Daily revenue", axis=alt.Axis(format="$,.0f")),
-            tooltip=[
-                alt.Tooltip("day:T", title="Date"),
-                alt.Tooltip("revenue:Q", title="Revenue", format="$,.0f"),
-                alt.Tooltip("profit:Q", title="Profit", format="$,.0f"),
-                alt.Tooltip("orders:Q", title="Orders"),
-            ],
-        )
-        .properties(height=300, title="Daily revenue")
+            tooltip=[alt.Tooltip("day:T", title="Date"),
+                     alt.Tooltip("revenue:Q", title="Revenue", format="$,.0f")]
+        ).properties(height=300, title=f"Daily revenue (goal/day = ${goal_day:,.0f})")
     )
-    st.altair_chart(line_rev, use_container_width=True)
+    rule_daily = alt.Chart(pd.DataFrame({"goal":[goal_day]})).mark_rule(strokeDash=[6,3], size=2).encode(
+        y=alt.Y("goal:Q", axis=alt.Axis(format="$,.0f"))
+    )
+    st.altair_chart(line_rev + rule_daily, use_container_width=True)
 
-by_day_rep = (
-    df_f.assign(day=df_f[COL_DATE].dt.floor("D"))
-    .groupby(["day", "sales_rep"], as_index=False)
+# Weekly revenue + waterline
+weekly = (
+    df_f.assign(week=df_f[COL_DATE].dt.to_period("W-MON").dt.start_time)
+    .groupby("week", as_index=False)
     .agg(revenue=(COL_REV, "sum"))
+    .sort_values("week")
 )
-if not by_day_rep.empty:
-    stack_day = (
-        alt.Chart(by_day_rep)
-        .mark_bar()
-        .encode(
-            x=alt.X("day:T", title="Date"),
-            y=alt.Y("revenue:Q", title="Revenue", axis=alt.Axis(format="$,.0f")),
-            color=alt.Color("sales_rep:N", title="Sales Rep"),
-            tooltip=[
-                alt.Tooltip("day:T", title="Date"),
-                "sales_rep",
-                alt.Tooltip("revenue:Q", title="Revenue", format="$,.0f"),
-            ],
-        )
-        .properties(height=320, title="Revenue by day and rep (stacked)")
+if not weekly.empty:
+    base_w = alt.Chart(weekly).properties(height=320, title=f"Weekly Revenue vs Goal (goal/week = ${goal_week:,.0f})")
+    bars_w = base_w.mark_bar().encode(
+        x=alt.X("week:T", title="Week (Mon–Sun)"),
+        y=alt.Y("revenue:Q", title="Revenue", axis=alt.Axis(format="$,.0f")),
+        tooltip=[alt.Tooltip("week:T", title="Week start"),
+                 alt.Tooltip("revenue:Q", title="Revenue", format="$,.0f")]
     )
-    st.altair_chart(stack_day, use_container_width=True)
+    rule_w = alt.Chart(pd.DataFrame({"goal":[goal_week]})).mark_rule(strokeDash=[6,3], size=2).encode(
+        y=alt.Y("goal:Q", axis=alt.Axis(format="$,.0f"))
+    )
+    st.altair_chart(bars_w + rule_w, use_container_width=True)
 
+# Monthly revenue + waterline
+monthly_rev = (
+    df_f.assign(month=df_f[COL_DATE].dt.to_period("M").dt.start_time)
+    .groupby("month", as_index=False)
+    .agg(revenue=(COL_REV, "sum"))
+    .sort_values("month")
+)
+if not monthly_rev.empty:
+    base_m = alt.Chart(monthly_rev).properties(height=320, title=f"Monthly Revenue vs Goal (goal/month = ${goal_month:,.0f})")
+    bars_m = base_m.mark_bar().encode(
+        x=alt.X("month:T", title="Month"),
+        y=alt.Y("revenue:Q", title="Revenue", axis=alt.Axis(format="$,.0f")),
+        tooltip=[alt.Tooltip("month:T", title="Month"),
+                 alt.Tooltip("revenue:Q", title="Revenue", format="$,.0f")]
+    )
+    rule_m = alt.Chart(pd.DataFrame({"goal":[goal_month]})).mark_rule(strokeDash=[6,3], size=2).encode(
+        y=alt.Y("goal:Q", axis=alt.Axis(format="$,.0f"))
+    )
+    st.altair_chart(bars_m + rule_m, use_container_width=True)
+
+# Scatter (AOV vs Profit %)
 if not g.empty:
     scatter = (
-        alt.Chart(g)
-        .mark_circle()
-        .encode(
+        alt.Chart(g).mark_circle().encode(
             x=alt.X("aov:Q", title="AOV", axis=alt.Axis(format="$,.0f")),
             y=alt.Y("profit_pct:Q", title="Profit %", axis=alt.Axis(format=".1%")),
             size=alt.Size("orders:Q", title="Orders", scale=alt.Scale(range=[50, 1200])),
-            color=alt.Color(
-                "MOI Overall:N",
-                scale=alt.Scale(domain=list(PALETA.keys()), range=list(PALETA.values())),
-                legend=alt.Legend(title="MOI"),
-            ),
+            color=alt.Color("MOI Overall:N",
+                            scale=alt.Scale(domain=list(PALETA.keys()), range=list(PALETA.values())),
+                            legend=alt.Legend(title="MOI")),
             tooltip=["sales_rep", t_aov, t_pct, t_ord, t_rev, t_prof, "MOI Overall"],
-        )
-        .properties(height=340, title="AOV vs Profit % (size = orders)")
+        ).properties(height=340, title="AOV vs Profit % (size = orders)")
     )
     st.altair_chart(scatter, use_container_width=True)
