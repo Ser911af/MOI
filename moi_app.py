@@ -239,7 +239,7 @@ def fetch_server_filtered_v2(dstart: date, dend: date) -> pd.DataFrame:
 
     start = 0
     while True:
-        resp = base.range(start, start+PAGE-1).execute()
+        resp = base.range(start, start + PAGE - 1).execute()
         batch = pd.DataFrame(resp.data or [])
         if batch.empty:
             break
@@ -277,6 +277,38 @@ def apply_filters(df: pd.DataFrame, exclude_sundays: bool, paid_only: bool, excl
         x = x[(x[COL_REV] > 0) & (x[COL_PROF] >= 0)]
     return x
 
+# ===================== AGG BY REP (añadido) =====================
+def agg_by_rep(df: pd.DataFrame) -> pd.DataFrame:
+    """Aggrega por vendedor: revenue, profit, órdenes, %profit y AOV."""
+    if df is None or df.empty:
+        return pd.DataFrame(
+            columns=["sales_rep", "revenue_sum", "profit_sum", "orders", "profit_pct", "aov"]
+        )
+
+    if not np.issubdtype(df[COL_DATE].dtype, np.datetime64):
+        df[COL_DATE] = pd.to_datetime(df[COL_DATE], errors="coerce")
+    df[COL_REV] = pd.to_numeric(df[COL_REV], errors="coerce")
+    df[COL_PROF] = pd.to_numeric(df[COL_PROF], errors="coerce")
+    df[COL_REP] = df[COL_REP].astype("string").str.strip().fillna("(No rep)")
+
+    g = (
+        df.groupby(COL_REP, dropna=False)
+          .agg(
+              revenue_sum=(COL_REV, "sum"),
+              profit_sum=(COL_PROF, "sum"),
+              orders=(COL_INV, pd.Series.nunique),
+          )
+          .reset_index()
+    )
+
+    g["profit_pct"] = np.where(
+        g["revenue_sum"] > 0, g["profit_sum"] / g["revenue_sum"], 0.0
+    )
+    g["aov"] = np.where(
+        g["orders"] > 0, g["revenue_sum"] / g["orders"], 0.0
+    )
+
+    return g.sort_values(["revenue_sum", "orders"], ascending=[False, False]).reset_index(drop=True)
 
 # ===================== HEADER =====================
 c1, c2 = st.columns([1, 6])
@@ -362,9 +394,6 @@ with st.expander("🔎 Diagnostics", expanded=False):
             "unique_reps": int(df_f[COL_REP].nunique()) if not df_f.empty else 0,
             "min_req": df_f[COL_DATE].min().strftime("%Y-%m-%d") if not df_f.empty else None,
             "max_req": df_f[COL_DATE].max().strftime("%Y-%m-%d") if not df_f.empty else None,
-            "server_count": st.session_state.get("_server_count"),
-            "fetched_rows": st.session_state.get("_last_fetch_rows"),
-            "pages": st.session_state.get("_last_fetch_pages"),
         }
     )
     if not df_f.empty:
@@ -484,7 +513,7 @@ st.caption(
 rows = []
 for _, r in g.iterrows():
     band_row = {
-        "SALES_REP": _band_badge(r["MOI Overall"]),        # badge en primera col
+        "SALES_REP": _band_badge(r["MOI Overall"]),
         "REVENUE_SUM": _band_badge(r["Revenue Band"]),
         "PROFIT_SUM": _band_badge(r["Profit Band"]),
         "PROFIT_PCT": _band_badge(r["%Profit Band"]),
@@ -523,7 +552,6 @@ html = sty.to_html(escape=False)
 st.markdown(html, unsafe_allow_html=True)
 
 # ===================== MEDIDORES (VASO) POR GRANULARIDAD =====================
-# Ventanas ancladas a base_date (coherentes con week_mode)
 def _period_window(base_d: date, gran: str, week_mode: str):
     ts = pd.Timestamp(base_d)
     if gran == "Day":
@@ -570,7 +598,7 @@ def meter(title: str, actual: float, goal: float):
     """
     st.markdown(bar_html, unsafe_allow_html=True)
 
-# Calcula ventanas y valores actuales por granularidad
+# Ventanas y valores actuales por granularidad
 dS, dE = _period_window(base_date, "Day", week_mode)
 wS, wE = _period_window(base_date, "Week", week_mode)
 mS, mE = _period_window(base_date, "Month", week_mode)
@@ -753,4 +781,3 @@ if not g.empty:
         ).properties(height=340, title="AOV vs Profit % (size = orders)")
     )
     st.altair_chart(scatter, use_container_width=True)
-
