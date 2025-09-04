@@ -345,12 +345,13 @@ with st.sidebar:
     # === GOAL / WATERLINE ===
     st.markdown("### 🎯 Goal (remaining)")
     goal_remaining = st.number_input(
-        "Remaining revenue goal",
-        min_value=0,
-        value=13_500_000,  # e.g., $13.5M
-        step=50_000,
-        help="Revenue still needed within the selected horizon."
+    "Remaining revenue goal",
+    min_value=0,
+    value=25_000_000,  # Updated: $25M
+    step=50_000,
+    help="Revenue still needed within the selected horizon."
     )
+
     default_goal_end = date(base_date.year, 12, 31)
     goal_end = st.date_input(
         "Goal horizon (until)", value=default_goal_end,
@@ -710,3 +711,4 @@ else:
         ).properties(height=340, title="AOV vs Profit % (size = orders)")
     )
     st.altair_chart(scatter, use_container_width=True)
+
