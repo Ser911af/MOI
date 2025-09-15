@@ -277,6 +277,81 @@ def apply_filters(df: pd.DataFrame, exclude_sundays: bool, paid_only: bool, excl
         x = x[(x[COL_REV] > 0) & (x[COL_PROF] >= 0)]
     return x
 
+# ===================== NEW: ACTIVITY HELPERS =====================
+@st.cache_data(show_spinner=False, ttl=60)
+def fetch_daily_activity(dstart: date, dend: date, usernames: list[str] | None) -> pd.DataFrame:
+    """
+    Actividad diaria (Reached/Engaged/Closed) agregada por fecha.
+    Opcional: filtrar por uno o más usernames (daily_metrics.user_name).
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return pd.DataFrame(columns=["d", "reached", "engaged", "closed"])
+
+    client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+    # Ventana [dstart, dend] en America/Bogota → UTC para consultar created_at
+    start_ts = pd.Timestamp(dstart).tz_localize("America/Bogota").tz_convert("UTC")
+    end_ts   = (pd.Timestamp(dend) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)).tz_localize("America/Bogota").tz_convert("UTC")
+
+    frames: list[pd.DataFrame] = []
+    PAGE = 1000
+    base = (
+        client.table("daily_metrics")
+        .select("created_at,user_name,clients_reached_out,clients_engaged,clients_closed")
+        .gte("created_at", start_ts.isoformat())
+        .lte("created_at", end_ts.isoformat())
+        .order("created_at", desc=False)
+    )
+    if usernames:
+        base = base.in_("user_name", usernames)
+
+    start = 0
+    while True:
+        resp = base.range(start, start+PAGE-1).execute()
+        batch = pd.DataFrame(resp.data or [])
+        if batch.empty:
+            break
+        frames.append(batch)
+        if len(batch) < PAGE:
+            break
+        start += PAGE
+
+    if not frames:
+        return pd.DataFrame(columns=["d", "reached", "engaged", "closed"])
+
+    df = pd.concat(frames, ignore_index=True)
+    df["created_at"] = pd.to_datetime(df["created_at"], utc=True, errors="coerce").dt.tz_convert("America/Bogota")
+    df["d"] = df["created_at"].dt.tz_localize(None).dt.date
+
+    # Numerificación + guardas lógicas en lectura (no alteramos DB)
+    for c in ["clients_reached_out","clients_engaged","clients_closed"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+    df["clients_engaged"] = df[["clients_engaged","clients_reached_out"]].min(axis=1)
+    df["clients_closed"]  = df[["clients_closed","clients_reached_out"]].min(axis=1)
+
+    g = (df.groupby("d", dropna=False)
+            .agg(reached=("clients_reached_out","sum"),
+                 engaged=("clients_engaged","sum"),
+                 closed =("clients_closed","sum"))
+            .reset_index())
+    return g
+
+@st.cache_data(show_spinner=False, ttl=300)
+def fetch_user_map() -> pd.DataFrame:
+    """Mapa username ↔ full_name para alinear ventas (sales_rep) con actividad (user_name)."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return pd.DataFrame(columns=["username","full_name"])
+    client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    resp = client.table("user_profiles").select("username,full_name").execute()
+    return pd.DataFrame(resp.data or [])
+
+def _safe_div(num, den):
+    try:
+        num = float(num); den = float(den)
+        return (num/den) if den else 0.0
+    except Exception:
+        return 0.0
+
 # ===================== AGG BY REP =====================
 def agg_by_rep(df: pd.DataFrame) -> pd.DataFrame:
     """Aggregate per rep: revenue, profit, orders, profit% and AOV."""
@@ -611,6 +686,69 @@ with c2:
     meter(f"Week · {pd.to_datetime(wS).date()} → {pd.to_datetime(wE).date()}", actual_week, goal_week)
     meter(f"Year · {pd.to_datetime(yS).date()} → {pd.to_datetime(yE).date()}", actual_year, goal_year)
 
+# ===================== NEW: DAILY COMMERCIAL ACTIVITY – COMBINED TABLE =====================
+st.markdown("---")
+st.markdown("## 🧩 Daily Commercial Activity – Combined Table")
+
+# Filtro por representante (usa display name contenido en COL_REP)
+rep_options = sorted(df_f[COL_REP].dropna().astype(str).unique().tolist()) if not df_f.empty else []
+selected_rep = st.selectbox("Filter by Representative", options=["(All)"] + rep_options, index=0)
+
+if selected_rep != "(All)":
+    df_rep = df_f[df_f[COL_REP] == selected_rep].copy()
+else:
+    df_rep = df_f.copy()
+
+# Mapeo full_name → username(s) para activity (daily_metrics.user_name) vía user_profiles
+user_map_df = fetch_user_map()
+if selected_rep != "(All)" and not user_map_df.empty:
+    usernames_for_rep = user_map_df.loc[user_map_df["full_name"] == selected_rep, "username"].astype(str).unique().tolist()
+    if not usernames_for_rep:
+        # fallback por si sales_rep ya fuese username
+        usernames_for_rep = [selected_rep]
+else:
+    usernames_for_rep = None  # sin filtro por usuario en actividad
+
+# Actividad (Reached/Engaged/Closed) por día dentro del rango efectivo
+activity_daily = fetch_daily_activity(dstart_eff, dend_eff, usernames_for_rep)
+
+# Ventas por día (usa df_rep ya con filtros de negocio)
+sales_daily = (
+    df_rep.assign(d=df_rep[COL_DATE].dt.date)
+          .groupby("d", dropna=False)
+          .agg(
+              orders=(COL_INV, pd.Series.nunique),
+              revenue_sum=(COL_REV, "sum"),
+              profit_sum=(COL_PROF,"sum")
+          ).reset_index()
+)
+sales_daily["aov"] = sales_daily.apply(lambda r: _safe_div(r["revenue_sum"], r["orders"]), axis=1)
+sales_daily["profit_pct"] = sales_daily.apply(lambda r: _safe_div(r["profit_sum"], r["revenue_sum"]), axis=1)
+
+# Outer join por fecha (para no perder días sin ventas o sin actividad)
+comb = pd.merge(
+    sales_daily, activity_daily, on="d", how="outer", validate="1:1"
+).fillna({"orders":0,"revenue_sum":0,"profit_sum":0,"aov":0,"profit_pct":0,"reached":0,"engaged":0,"closed":0})
+comb = comb.sort_values("d").reset_index(drop=True)
+
+# Tabla final (sin fila Target)
+table_daily = pd.DataFrame({
+    "DATE": pd.to_datetime(comb["d"]).dt.strftime("%b %d, %Y").fillna(""),
+    "ORDERS CREATED": comb["orders"].astype(int),
+    "Total Profit": comb["profit_sum"].apply(lambda x: fmt_money(x,0)),
+    "Av. Sale": comb["aov"].apply(lambda x: fmt_money(x,0)),
+    "% Profit": comb["profit_pct"].apply(lambda x: fmt_pct_unit(x,1)),
+    "CLIENTS REACHED OUT TO": comb["reached"].astype(int),
+    "CLIENTS ENGAGED": comb["engaged"].astype(int),
+    "CLIENTS CLOSED": comb["closed"].astype(int),
+})
+
+st.dataframe(table_daily, use_container_width=True)
+
+# Aviso de inconsistencias de input (opcional)
+if (comb["engaged"] > comb["reached"]).any() or (comb["closed"] > comb["reached"]).any():
+    st.warning("Some days show Engaged/Closed > Reached. Input was capped for display; please review daily_metrics entries.")
+
 # ===================== CSV EXPORT =====================
 csv_export = g.loc[:, [
     COL_REP, "MOI Overall", "revenue_sum", "profit_sum", "profit_pct",
@@ -711,4 +849,3 @@ else:
         ).properties(height=340, title="AOV vs Profit % (size = orders)")
     )
     st.altair_chart(scatter, use_container_width=True)
-
