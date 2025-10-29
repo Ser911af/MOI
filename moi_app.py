@@ -280,16 +280,10 @@ def apply_filters(df: pd.DataFrame, exclude_sundays: bool, paid_only: bool, excl
 # ===================== NEW: ACTIVITY HELPERS =====================
 @st.cache_data(show_spinner=False, ttl=60)
 def fetch_daily_activity(dstart: date, dend: date, usernames: list[str] | None) -> pd.DataFrame:
-    """
-    Actividad diaria (Reached/Engaged/Closed) agregada por fecha.
-    Opcional: filtrar por uno o más usernames (daily_metrics.user_name).
-    """
     if not SUPABASE_URL or not SUPABASE_KEY:
         return pd.DataFrame(columns=["d", "reached", "engaged", "closed"])
 
     client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-    # Ventana [dstart, dend] en America/Bogota → UTC para consultar created_at
     start_ts = pd.Timestamp(dstart).tz_localize("America/Bogota").tz_convert("UTC")
     end_ts   = (pd.Timestamp(dend) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)).tz_localize("America/Bogota").tz_convert("UTC")
 
@@ -323,7 +317,6 @@ def fetch_daily_activity(dstart: date, dend: date, usernames: list[str] | None) 
     df["created_at"] = pd.to_datetime(df["created_at"], utc=True, errors="coerce").dt.tz_convert("America/Bogota")
     df["d"] = df["created_at"].dt.tz_localize(None).dt.date
 
-    # Numerificación + guardas lógicas en lectura (no alteramos DB)
     for c in ["clients_reached_out","clients_engaged","clients_closed"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
     df["clients_engaged"] = df[["clients_engaged","clients_reached_out"]].min(axis=1)
@@ -338,7 +331,6 @@ def fetch_daily_activity(dstart: date, dend: date, usernames: list[str] | None) 
 
 @st.cache_data(show_spinner=False, ttl=300)
 def fetch_user_map() -> pd.DataFrame:
-    """Mapa username ↔ full_name para alinear ventas (sales_rep) con actividad (user_name)."""
     if not SUPABASE_URL or not SUPABASE_KEY:
         return pd.DataFrame(columns=["username","full_name"])
     client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -354,7 +346,6 @@ def _safe_div(num, den):
 
 # ===================== AGG BY REP =====================
 def agg_by_rep(df: pd.DataFrame) -> pd.DataFrame:
-    """Aggregate per rep: revenue, profit, orders, profit% and AOV."""
     if df is None or df.empty:
         return pd.DataFrame(
             columns=["sales_rep", "revenue_sum", "profit_sum", "orders", "profit_pct", "aov"]
@@ -417,12 +408,11 @@ with st.sidebar:
     paid_only = st.checkbox("Only 'Paid' invoices", value=False)
     exclude_neg = st.checkbox("Exclude negatives (revenue ≤ 0 or profit < 0)", value=True)
 
-    # === GOAL / WATERLINE ===
     st.markdown("### 🎯 Goal (remaining)")
     goal_remaining = st.number_input(
         "Remaining revenue goal",
         min_value=0,
-        value=25_000_000,  # Updated: $25M
+        value=25_000_000,
         step=50_000,
         help="Revenue still needed within the selected horizon."
     )
@@ -433,7 +423,7 @@ with st.sidebar:
         help="The goal is spread from base date up to this date."
     )
 
-    # NUEVO: usar solo días laborales Mon–Fri para repartir la meta
+    # Toggle: usar solo L–V para repartir metas
     workdays_mon_fri = st.checkbox(
         "Workdays only (Mon–Fri)",
         value=True,
@@ -523,7 +513,7 @@ for _, r in g.iterrows():
         "SALES_REP": _band_badge(r["MOI Overall"]),
         "REVENUE_SUM": _band_badge(r["Revenue Band"]),
         "PROFIT_SUM": _band_badge(r["Profit Band"]),
-        "%Profit Band": _band_badge(r["%Profit Band"]),
+        "PROFIT_PCT": _band_badge(r["%Profit Band"]),
         "ORDERS": _band_badge(r["#Orders Band"]),
         "AOV": _band_badge(r["AOV Band"]),
     }
@@ -542,7 +532,6 @@ out_interleaved = pd.DataFrame(
     rows, columns=["SALES_REP","REVENUE_SUM","PROFIT_SUM","PROFIT_PCT","ORDERS","AOV"]
 )
 
-# Render as HTML to keep badge styling
 sty = out_interleaved.style
 try:
     sty = sty.hide(axis="index")
@@ -558,7 +547,7 @@ sty = (
 html = sty.to_html(escape=False)
 st.markdown(html, unsafe_allow_html=True)
 
-# ===================== GOAL METER (Mon–Fri + única granularidad) =====================
+# ===================== GOAL METERS (Base & Required) =====================
 def _period_window(base_d: date, gran: str, week_mode: str):
     ts = pd.Timestamp(base_d)
     if gran == "Day":
@@ -605,7 +594,6 @@ def meter(title: str, actual: float, goal: float):
     """
     st.markdown(bar_html, unsafe_allow_html=True)
 
-# --- Nueva lógica de meta: tasa diaria sobre L–V y un solo medidor por granularidad ---
 def workdays_between(dstart: date, dend: date, mon_fri: bool) -> int:
     s = pd.Timestamp(dstart); e = pd.Timestamp(dend)
     days = pd.date_range(s, e, freq="D")
@@ -623,31 +611,67 @@ def goal_for_window(rate_per_day: float, win_start: pd.Timestamp, win_end: pd.Ti
         days = days[days.weekday < 5]
     return rate_per_day * max(len(days), 1)
 
-# Rango total de meta (desde base_date hasta goal_end)
+def goal_for_window_from_today(rate_per_day: float,
+                               win_start: pd.Timestamp,
+                               win_end: pd.Timestamp,
+                               mon_fri: bool,
+                               today_date: date,
+                               goal_end_date: date) -> float:
+    s = max(win_start, pd.Timestamp(today_date).normalize())
+    e = min(win_end,   pd.Timestamp(goal_end_date).normalize())
+    if e < s:
+        return 0.0
+    return goal_for_window(rate_per_day, s, e, mon_fri)
+
+def actual_in_window_from_today(df_scope: pd.DataFrame,
+                                win_start: pd.Timestamp,
+                                win_end: pd.Timestamp,
+                                today_date: date,
+                                goal_end_date: date) -> float:
+    s = max(win_start, pd.Timestamp(today_date).normalize())
+    e = min(win_end,   pd.Timestamp(goal_end_date).normalize())
+    if e < s:
+        return 0.0
+    return _revenue_in_window(df_scope, s, e)
+
+# Rango total de meta y tasas
 goal_start = pd.to_datetime(base_date).date()
 goal_end_  = goal_end
 
-# Tasa por día (Mon–Fri si está activo)
-rate = goal_rate_per_day(goal_remaining, goal_start, goal_end_ , workdays_mon_fri)
+rate_base  = goal_rate_per_day(goal_remaining, goal_start, goal_end_, workdays_mon_fri)
 
-# Ventana de la granularidad actual
+today = pd.Timestamp.today().normalize().date()
+start_for_req = max(today, goal_start)
+N_rest = workdays_between(start_for_req, goal_end_, True)  # requerido siempre Mon–Fri
+rate_req = goal_remaining / N_rest if N_rest > 0 else 0.0
+
+# Ventana según granularidad
 gS, gE = _period_window(base_date, gran, week_mode)
-actual_gran = _revenue_in_window(df_f, gS, gE)
-goal_gran   = goal_for_window(rate, gS, gE, workdays_mon_fri)
 
+# Plan base: actual y meta de la ventana completa
+actual_gran_base = _revenue_in_window(df_f, gS, gE)
+goal_gran_base   = goal_for_window(rate_base, gS, gE, workdays_mon_fri)
+
+# Plan requerido (desde hoy): recortar ventana al futuro
+actual_gran_req  = actual_in_window_from_today(df_f, gS, gE, today, goal_end_)
+goal_gran_req    = goal_for_window_from_today(rate_req, gS, gE, workdays_mon_fri, today, goal_end_)
+
+# UI: dos medidores
 st.markdown("### 🧪 Progress toward goal")
 gran_label = f"{gran} · {pd.to_datetime(gS).date()} → {pd.to_datetime(gE).date()}"
-meter(gran_label, actual_gran, goal_gran)
-st.caption(
-    f"Goal rate: {fmt_money(rate,0)} por día "
-    + ("(Mon–Fri)" if workdays_mon_fri else "(todos los días)")
-)
 
-# ===================== NEW: DAILY COMMERCIAL ACTIVITY – COMBINED TABLE =====================
+c1, c2 = st.columns(2)
+with c1:
+    meter(f"{gran_label} · Plan base", actual_gran_base, goal_gran_base)
+    st.caption(f"Rate base: {fmt_money(rate_base,0)} por día (Mon–Fri)")
+with c2:
+    meter(f"{gran_label} · Plan requerido (desde hoy)", actual_gran_req, goal_gran_req)
+    st.caption(f"Rate requerido: {fmt_money(rate_req,0)} por día (Mon–Fri)")
+
+# ===================== DAILY COMMERCIAL ACTIVITY – COMBINED TABLE =====================
 st.markdown("---")
 st.markdown("## 🧩 Daily Commercial Activity – Combined Table")
 
-# Filtro por representante (usa display name contenido en COL_REP)
 rep_options = sorted(df_f[COL_REP].dropna().astype(str).unique().tolist()) if not df_f.empty else []
 selected_rep = st.selectbox("Filter by Representative", options=["(All)"] + rep_options, index=0)
 
@@ -656,20 +680,16 @@ if selected_rep != "(All)":
 else:
     df_rep = df_f.copy()
 
-# Mapeo full_name → username(s) para activity (daily_metrics.user_name) vía user_profiles
 user_map_df = fetch_user_map()
 if selected_rep != "(All)" and not user_map_df.empty:
     usernames_for_rep = user_map_df.loc[user_map_df["full_name"] == selected_rep, "username"].astype(str).unique().tolist()
     if not usernames_for_rep:
-        # fallback por si sales_rep ya fuese username
         usernames_for_rep = [selected_rep]
 else:
-    usernames_for_rep = None  # sin filtro por usuario en actividad
+    usernames_for_rep = None
 
-# Actividad (Reached/Engaged/Closed) por día dentro del rango efectivo
 activity_daily = fetch_daily_activity(dstart_eff, dend_eff, usernames_for_rep)
 
-# Ventas por día (usa df_rep ya con filtros de negocio)
 sales_daily = (
     df_rep.assign(d=df_rep[COL_DATE].dt.date)
           .groupby("d", dropna=False)
@@ -682,13 +702,11 @@ sales_daily = (
 sales_daily["aov"] = sales_daily.apply(lambda r: _safe_div(r["revenue_sum"], r["orders"]), axis=1)
 sales_daily["profit_pct"] = sales_daily.apply(lambda r: _safe_div(r["profit_sum"], r["revenue_sum"]), axis=1)
 
-# Outer join por fecha (para no perder días sin ventas o sin actividad)
 comb = pd.merge(
     sales_daily, activity_daily, on="d", how="outer", validate="1:1"
 ).fillna({"orders":0,"revenue_sum":0,"profit_sum":0,"aov":0,"profit_pct":0,"reached":0,"engaged":0,"closed":0})
 comb = comb.sort_values("d").reset_index(drop=True)
 
-# Tabla final (sin fila Target)
 table_daily = pd.DataFrame({
     "DATE": pd.to_datetime(comb["d"]).dt.strftime("%b %d, %Y").fillna(""),
     "ORDERS CREATED": comb["orders"].astype(int),
@@ -702,7 +720,6 @@ table_daily = pd.DataFrame({
 
 st.dataframe(table_daily, use_container_width=True)
 
-# Aviso de inconsistencias de input (opcional)
 if (comb["engaged"] > comb["reached"]).any() or (comb["closed"] > comb["reached"]).any():
     st.warning("Some days show Engaged/Closed > Reached. Input was capped for display; please review daily_metrics entries.")
 
@@ -736,7 +753,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ===================== CHARTS (kept only these) =====================
+# ===================== CHARTS =====================
 st.markdown("### 📊 Charts")
 
 n_reps = len(g)
@@ -756,7 +773,6 @@ else:
     t_aov = alt.Tooltip("aov:Q", title="AOV", format="$,.0f")
     t_ord = alt.Tooltip("orders:Q", title="Orders")
 
-    # 1) Revenue by Sales Rep
     chart_rev = (
         alt.Chart(g_top).mark_bar().encode(
             x=alt.X("revenue_sum:Q", title="Revenue", axis=alt.Axis(format="$,.0f")),
@@ -766,7 +782,6 @@ else:
     )
     st.altair_chart(chart_rev, use_container_width=True)
 
-    # 2) Profit by Sales Rep
     chart_profit = (
         alt.Chart(g_top).mark_bar().encode(
             x=alt.X("profit_sum:Q", title="Profit", axis=alt.Axis(format="$,.0f")),
@@ -776,7 +791,6 @@ else:
     )
     st.altair_chart(chart_profit, use_container_width=True)
 
-    # 3) Profit % by Sales Rep
     chart_margin = (
         alt.Chart(g_top).mark_bar().encode(
             x=alt.X("profit_pct:Q", title="Profit %", axis=alt.Axis(format=".1%")),
@@ -791,7 +805,6 @@ else:
     )
     st.altair_chart(chart_margin, use_container_width=True)
 
-    # 4) AOV vs Profit %
     scatter = (
         alt.Chart(g).mark_circle().encode(
             x=alt.X("aov:Q", title="AOV", axis=alt.Axis(format="$,.0f")),
