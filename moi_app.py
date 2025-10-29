@@ -420,11 +420,11 @@ with st.sidebar:
     # === GOAL / WATERLINE ===
     st.markdown("### 🎯 Goal (remaining)")
     goal_remaining = st.number_input(
-    "Remaining revenue goal",
-    min_value=0,
-    value=25_000_000,  # Updated: $25M
-    step=50_000,
-    help="Revenue still needed within the selected horizon."
+        "Remaining revenue goal",
+        min_value=0,
+        value=25_000_000,  # Updated: $25M
+        step=50_000,
+        help="Revenue still needed within the selected horizon."
     )
 
     default_goal_end = date(base_date.year, 12, 31)
@@ -432,9 +432,12 @@ with st.sidebar:
         "Goal horizon (until)", value=default_goal_end,
         help="The goal is spread from base date up to this date."
     )
-    use_observed_for_goal = st.checkbox(
-        "Use 'Observed periods' to split the goal (same as targets)",
-        value=(targets_mode == "Observed periods")
+
+    # NUEVO: usar solo días laborales Mon–Fri para repartir la meta
+    workdays_mon_fri = st.checkbox(
+        "Workdays only (Mon–Fri)",
+        value=True,
+        help="Usa solo lunes a viernes para repartir la meta (ignora sábados y domingos)."
     )
 
     if st.button("Refresh"):
@@ -503,65 +506,6 @@ rank_map = {name: i for i, name in enumerate([t[0] for t in scale])}
 g["moi_rank"] = g["MOI Overall"].map(rank_map)
 g = g.sort_values(["moi_rank", "revenue_sum"], ascending=[True, False]).reset_index(drop=True)
 
-# ===================== GOAL SPLIT (for meters) =====================
-def periods_between(dstart: date, dend: date, gran: str, exclude_sun: bool) -> int:
-    s = pd.Timestamp(dstart)
-    e = pd.Timestamp(dend)
-    if gran == "Year":
-        return max(len(pd.period_range(s, e, freq="Y")), 1)
-    if gran == "Month":
-        return max(len(pd.period_range(s, e, freq="M")), 1)
-    if gran == "Week":
-        return max(len(pd.period_range(s, e, freq="W-MON")), 1)
-    days = pd.date_range(s, e, freq="D")
-    if exclude_sun:
-        return max(int((days.weekday != 6).sum()), 1)
-    return max(len(days), 1)
-
-def goal_per_period(goal_remaining: float,
-                    base_d: date,
-                    end_d: date,
-                    gran: str,
-                    use_observed: bool,
-                    df_scope: pd.DataFrame,
-                    col_date: str,
-                    exclude_sun: bool):
-    if use_observed:
-        def _obs(gr):
-            mask = (df_scope[col_date] >= pd.Timestamp(base_d)) & (df_scope[col_date] <= pd.Timestamp(end_d))
-            return count_observed_periods(df_scope[mask], gr, col_date)
-        n_day = _obs("Day"); n_week = _obs("Week"); n_month = _obs("Month"); n_year = _obs("Year")
-    else:
-        n_day = periods_between(base_d, end_d, "Day", exclude_sun)
-        n_week = periods_between(base_d, end_d, "Week", exclude_sun)
-        n_month = periods_between(base_d, end_d, "Month", exclude_sun)
-        n_year = periods_between(base_d, end_d, "Year", exclude_sun)
-    n_day = max(n_day,1); n_week = max(n_week,1); n_month = max(n_month,1); n_year = max(n_year,1)
-    breakdown = {
-        "Day": goal_remaining / n_day,
-        "Week": goal_remaining / n_week,
-        "Month": goal_remaining / n_month,
-        "Year": goal_remaining / n_year,
-        "_counts": {"Day": n_day, "Week": n_week, "Month": n_month, "Year": n_year},
-    }
-    return breakdown[gran], breakdown
-
-goal_unit, goal_breakdown = goal_per_period(
-    goal_remaining=goal_remaining,
-    base_d=base_date,
-    end_d=goal_end,
-    gran=gran,
-    use_observed=use_observed_for_goal,
-    df_scope=df_f,
-    col_date=COL_DATE,
-    exclude_sun=exclude_sundays
-)
-goal_day   = goal_breakdown["Day"]
-goal_week  = goal_breakdown["Week"]
-goal_month = goal_breakdown["Month"]
-goal_year  = goal_breakdown["Year"]
-counts     = goal_breakdown["_counts"]
-
 # ===================== TITLE =====================
 note = f" · targets × {factor} {gran.lower()}" + ("s" if factor != 1 else "")
 st.subheader(
@@ -571,11 +515,6 @@ st.subheader(
     + (" · negatives excluded" if exclude_neg else "")
     + note
 )
-st.caption(
-    f"🎯 Goal split · Day: ${goal_day:,.0f} · Week: ${goal_week:,.0f} · "
-    f"Month: ${goal_month:,.0f} · Year: ${goal_year:,.0f} "
-    f"(periods left → D:{counts['Day']} · W:{counts['Week']} · M:{counts['Month']} · Y:{counts['Year']})"
-)
 
 # ===================== TABLE (BAND ROW + DATA ROW) =====================
 rows = []
@@ -584,7 +523,7 @@ for _, r in g.iterrows():
         "SALES_REP": _band_badge(r["MOI Overall"]),
         "REVENUE_SUM": _band_badge(r["Revenue Band"]),
         "PROFIT_SUM": _band_badge(r["Profit Band"]),
-        "PROFIT_PCT": _band_badge(r["%Profit Band"]),
+        "%Profit Band": _band_badge(r["%Profit Band"]),
         "ORDERS": _band_badge(r["#Orders Band"]),
         "AOV": _band_badge(r["AOV Band"]),
     }
@@ -619,7 +558,7 @@ sty = (
 html = sty.to_html(escape=False)
 st.markdown(html, unsafe_allow_html=True)
 
-# ===================== METERS (GOAL PROGRESS) =====================
+# ===================== GOAL METER (Mon–Fri + única granularidad) =====================
 def _period_window(base_d: date, gran: str, week_mode: str):
     ts = pd.Timestamp(base_d)
     if gran == "Day":
@@ -666,25 +605,43 @@ def meter(title: str, actual: float, goal: float):
     """
     st.markdown(bar_html, unsafe_allow_html=True)
 
-# Windows + actuals
-dS, dE = _period_window(base_date, "Day", week_mode)
-wS, wE = _period_window(base_date, "Week", week_mode)
-mS, mE = _period_window(base_date, "Month", week_mode)
-yS, yE = _period_window(base_date, "Year", week_mode)
+# --- Nueva lógica de meta: tasa diaria sobre L–V y un solo medidor por granularidad ---
+def workdays_between(dstart: date, dend: date, mon_fri: bool) -> int:
+    s = pd.Timestamp(dstart); e = pd.Timestamp(dend)
+    days = pd.date_range(s, e, freq="D")
+    if mon_fri:
+        days = days[days.weekday < 5]  # 0..4 = Mon–Fri
+    return max(len(days), 1)
 
-actual_day   = _revenue_in_window(df_f, dS, dE)
-actual_week  = _revenue_in_window(df_f, wS, wE)
-actual_month = _revenue_in_window(df_f, mS, mE)
-actual_year  = _revenue_in_window(df_f, yS, yE)
+def goal_rate_per_day(goal_total: float, goal_start: date, goal_end: date, mon_fri: bool) -> float:
+    n = workdays_between(goal_start, goal_end, mon_fri)
+    return float(goal_total) / float(n)
 
-st.markdown("### 🧪 Progress toward goal by granularity")
-c1, c2 = st.columns(2)
-with c1:
-    meter(f"Day · {pd.to_datetime(dS).date()} → {pd.to_datetime(dE).date()}", actual_day, goal_day)
-    meter(f"Month · {pd.to_datetime(mS).date()} → {pd.to_datetime(mE).date()}", actual_month, goal_month)
-with c2:
-    meter(f"Week · {pd.to_datetime(wS).date()} → {pd.to_datetime(wE).date()}", actual_week, goal_week)
-    meter(f"Year · {pd.to_datetime(yS).date()} → {pd.to_datetime(yE).date()}", actual_year, goal_year)
+def goal_for_window(rate_per_day: float, win_start: pd.Timestamp, win_end: pd.Timestamp, mon_fri: bool) -> float:
+    days = pd.date_range(win_start, win_end, freq="D")
+    if mon_fri:
+        days = days[days.weekday < 5]
+    return rate_per_day * max(len(days), 1)
+
+# Rango total de meta (desde base_date hasta goal_end)
+goal_start = pd.to_datetime(base_date).date()
+goal_end_  = goal_end
+
+# Tasa por día (Mon–Fri si está activo)
+rate = goal_rate_per_day(goal_remaining, goal_start, goal_end_ , workdays_mon_fri)
+
+# Ventana de la granularidad actual
+gS, gE = _period_window(base_date, gran, week_mode)
+actual_gran = _revenue_in_window(df_f, gS, gE)
+goal_gran   = goal_for_window(rate, gS, gE, workdays_mon_fri)
+
+st.markdown("### 🧪 Progress toward goal")
+gran_label = f"{gran} · {pd.to_datetime(gS).date()} → {pd.to_datetime(gE).date()}"
+meter(gran_label, actual_gran, goal_gran)
+st.caption(
+    f"Goal rate: {fmt_money(rate,0)} por día "
+    + ("(Mon–Fri)" if workdays_mon_fri else "(todos los días)")
+)
 
 # ===================== NEW: DAILY COMMERCIAL ACTIVITY – COMBINED TABLE =====================
 st.markdown("---")
