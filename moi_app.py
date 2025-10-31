@@ -417,27 +417,23 @@ with st.sidebar:
     paid_only = st.checkbox("Only 'Paid' invoices", value=False)
     exclude_neg = st.checkbox("Exclude negatives (revenue ≤ 0 or profit < 0)", value=True)
 
-    # === GOAL / WATERLINE ===
-    st.markdown("### 🎯 Goal (remaining)")
-    goal_remaining = st.number_input(
-        "Remaining revenue goal",
+    # === GOAL (ANNUAL INVARIANT) ===
+    st.markdown("### 🎯 Annual goal (invariant)")
+    annual_goal = st.number_input(
+        "Annual revenue goal",
         min_value=0,
-        value=25_000_000,  # Updated: $25M
+        value=25_000_000,  # e.g., $25M
         step=50_000,
-        help="Revenue still needed within the selected horizon."
+        help="Meta ANUAL fija. Se reparte en el año del 'Base date'."
     )
+    year_start = date(base_date.year, 1, 1)
+    year_end = date(base_date.year, 12, 31)
+    st.caption(f"Goal horizon: {year_start} → {year_end}")
 
-    default_goal_end = date(base_date.year, 12, 31)
-    goal_end = st.date_input(
-        "Goal horizon (until)", value=default_goal_end,
-        help="The goal is spread from base date up to this date."
-    )
-
-    # NUEVO: usar solo días laborales Mon–Fri para repartir la meta
     workdays_mon_fri = st.checkbox(
         "Workdays only (Mon–Fri)",
         value=True,
-        help="Usa solo lunes a viernes para repartir la meta (ignora sábados y domingos)."
+        help="Reparte la meta solo en días laborables (L–V)."
     )
 
     if st.button("Refresh"):
@@ -558,7 +554,7 @@ sty = (
 html = sty.to_html(escape=False)
 st.markdown(html, unsafe_allow_html=True)
 
-# ===================== GOAL METER (Mon–Fri + única granularidad) =====================
+# ===================== GOAL METER – OPTION A (ANNUAL INVARIANT) =====================
 def _period_window(base_d: date, gran: str, week_mode: str):
     ts = pd.Timestamp(base_d)
     if gran == "Day":
@@ -605,7 +601,6 @@ def meter(title: str, actual: float, goal: float):
     """
     st.markdown(bar_html, unsafe_allow_html=True)
 
-# --- Nueva lógica de meta: tasa diaria sobre L–V y un solo medidor por granularidad ---
 def workdays_between(dstart: date, dend: date, mon_fri: bool) -> int:
     s = pd.Timestamp(dstart); e = pd.Timestamp(dend)
     days = pd.date_range(s, e, freq="D")
@@ -623,25 +618,34 @@ def goal_for_window(rate_per_day: float, win_start: pd.Timestamp, win_end: pd.Ti
         days = days[days.weekday < 5]
     return rate_per_day * max(len(days), 1)
 
-# Rango total de meta (desde base_date hasta goal_end)
-goal_start = pd.to_datetime(base_date).date()
-goal_end_  = goal_end
+# ---- Repartir la meta anual en TODO el año del base_date ----
+year_start = date(base_date.year, 1, 1)
+year_end   = date(base_date.year, 12, 31)
 
-# Tasa por día (Mon–Fri si está activo)
-rate = goal_rate_per_day(goal_remaining, goal_start, goal_end_ , workdays_mon_fri)
+# Tasa diaria sobre todo el año (con o sin L–V)
+rate = goal_rate_per_day(annual_goal, year_start, year_end, workdays_mon_fri)
 
-# Ventana de la granularidad actual
+# Ventana de la granularidad seleccionada
 gS, gE = _period_window(base_date, gran, week_mode)
 actual_gran = _revenue_in_window(df_f, gS, gE)
-goal_gran   = goal_for_window(rate, gS, gE, workdays_mon_fri)
+
+# ======= Variante A1: proporcional a días (coherente con L–V) =======
+goal_gran = goal_for_window(rate, gS, gE, workdays_mon_fri)
+
+# ======= Variante A2 (OPCIONAL): meses planos (12 iguales) =======
+flat_months = False  # <-- pon True si quieres 12 meses exactos ignorando # de días
+if flat_months and gran == "Month":
+    goal_gran = float(annual_goal) / 12.0
 
 st.markdown("### 🧪 Progress toward goal")
 gran_label = f"{gran} · {pd.to_datetime(gS).date()} → {pd.to_datetime(gE).date()}"
 meter(gran_label, actual_gran, goal_gran)
-st.caption(
-    f"Goal rate: {fmt_money(rate,0)} por día "
-    + ("(Mon–Fri)" if workdays_mon_fri else "(todos los días)")
-)
+
+# Info de tasa
+if workdays_mon_fri:
+    st.caption(f"Annual goal: {fmt_money(annual_goal,0)} · Daily rate (Mon–Fri): {fmt_money(rate,0)}")
+else:
+    st.caption(f"Annual goal: {fmt_money(annual_goal,0)} · Daily rate (calendar): {fmt_money(rate,0)}")
 
 # ===================== NEW: DAILY COMMERCIAL ACTIVITY – COMBINED TABLE =====================
 st.markdown("---")
